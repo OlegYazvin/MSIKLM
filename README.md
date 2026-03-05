@@ -75,10 +75,9 @@ Currently, there are also the following packages available to install MSIKLM:
 # Usability
 
 MSIKLM is a pure command line application, however its keyboard illumination control functionality
-is encapsulated such that it could easily be integrated into a graphical user interface. However,
-I neither wrote one for it nor I plan to do so. It is quite easy to use, and here is how to use
-it. It always has to be called with at least one argument, i.e. running it without one will result
-in an error. Here is an overview over the valid commands:
+is encapsulated such that it can be integrated into a graphical user interface. It is quite easy
+to use, and here is how to use it. It always has to be called with at least one argument, i.e.
+running it without one will result in an error. Here is an overview over the valid commands:
 
 |command                                                       | valid arguments                                                                                | example                              |
 |--------------------------------------------------------------|------------------------------------------------------------------------------------------------|--------------------------------------|
@@ -123,6 +122,23 @@ Additionally, there are three extra commands that might be useful if something d
     msiklm help         -> shows the program's help
     sudo msiklm test    -> tests if a compatible keyboard is found
     sudo msiklm list    -> lists all found hid devices, this might be helpful if your keyboard is not detected by MSIKLM
+
+## Optional GUI
+
+An optional Tkinter GUI wrapper is available in:
+
+    gui/msiklm_gui.py
+
+Run it with:
+
+    sudo apt install python3-tk
+    python3 gui/msiklm_gui.py
+
+The GUI supports setting colors for the `left`, `middle`, `right` keyboard zones and optional
+zones (`logo`, `front_left`, `front_right`, `mouse`), then applies settings by executing `msiklm`.
+The GUI auto-elevates itself (authenticate once on launch) and has a compatibility mode enabled
+by default for devices that are unstable with repeated color writes. See `gui/README.md` for
+details and zone mapping assumptions.
 
 
 # Device Support
