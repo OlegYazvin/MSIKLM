@@ -160,6 +160,8 @@ FG_MAIN = "#dbe8ff"
 FG_MUTED = "#9eb4d8"
 ACCENT = "#3b8bf3"
 ACCENT_DARK = "#2d6dc0"
+SEAM_COLOR = "#4a607d"
+SEAM_GLOW = "#314861"
 FONT_UI = "DejaVu Sans"
 FONT_MONO = "DejaVu Sans Mono"
 
@@ -254,8 +256,8 @@ class MSIKLMGui(tk.Tk):
     def __init__(self, launched_as_root: bool) -> None:
         super().__init__()
         self.title("MSIKLM GUI")
-        self.geometry("1360x900")
-        self.minsize(1220, 780)
+        self.geometry("1420x900")
+        self.minsize(1260, 780)
         self.configure(bg=BG_APP)
         self.launched_as_root = launched_as_root
 
@@ -294,14 +296,23 @@ class MSIKLMGui(tk.Tk):
         style.configure("PanelAlt.TFrame", background=BG_PANEL_ALT)
         style.configure("Card.TLabelframe", background=BG_PANEL, foreground=FG_MAIN, bordercolor="#243654")
         style.configure("Card.TLabelframe.Label", background=BG_PANEL, foreground=FG_MAIN)
+        style.configure("RightCard.TLabelframe", background=BG_PANEL_ALT, foreground=FG_MAIN, bordercolor="#2b4365")
+        style.configure("RightCard.TLabelframe.Label", background=BG_PANEL_ALT, foreground=FG_MAIN)
         style.configure("TLabel", background=BG_PANEL, foreground=FG_MAIN)
         style.configure("Muted.TLabel", background=BG_PANEL, foreground=FG_MUTED)
         style.configure("Title.TLabel", background=BG_APP, foreground=lighten(ACCENT, 0.4), font=(FONT_UI, 21, "bold"))
         style.configure("Subtitle.TLabel", background=BG_APP, foreground="#7fa2d3", font=(FONT_UI, 10))
+        style.configure("PanelAlt.TLabel", background=BG_PANEL_ALT, foreground=FG_MAIN)
+        style.configure("PanelAltMuted.TLabel", background=BG_PANEL_ALT, foreground="#89a7d2")
         style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff", borderwidth=0, padding=8)
         style.map(
             "Accent.TButton",
             background=[("active", lighten(ACCENT, 0.1)), ("pressed", ACCENT_DARK)],
+        )
+        style.configure("Ghost.TButton", background="#1a2c49", foreground="#d5e5ff", borderwidth=1, padding=8)
+        style.map(
+            "Ghost.TButton",
+            background=[("active", "#213557"), ("pressed", "#182b46")],
         )
         style.configure("TButton", padding=8)
         style.configure("TCheckbutton", background=BG_PANEL, foreground=FG_MAIN)
@@ -345,11 +356,12 @@ class MSIKLMGui(tk.Tk):
         body.pack(fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        right = ttk.Frame(body, style="PanelAlt.TFrame", padding=12)
+        right = ttk.Frame(body, style="PanelAlt.TFrame", padding=14, width=500)
+        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        right.pack(side=tk.LEFT, fill=tk.Y, padx=(12, 0))
+        right.pack_propagate(False)
 
-        self.canvas = tk.Canvas(left, width=980, height=460, bg="#0a1628", highlightthickness=0)
+        self.canvas = tk.Canvas(left, width=940, height=460, bg="#0a1628", highlightthickness=0)
         self.canvas.pack(fill=tk.X, expand=False)
 
         ttk.Label(
@@ -380,13 +392,14 @@ class MSIKLMGui(tk.Tk):
         self.log_text.pack(fill=tk.BOTH, expand=True)
         ttk.Label(log_frame, textvariable=self.status_var, style="Muted.TLabel").pack(anchor=tk.W, pady=(6, 0))
 
-        zones_frame = ttk.LabelFrame(right, text="Zone Colors", style="Card.TLabelframe", padding=8)
+        zones_frame = ttk.LabelFrame(right, text="Zone Colors", style="RightCard.TLabelframe", padding=10)
         zones_frame.pack(fill=tk.X)
         ttk.Label(zones_frame, text="Use").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Zone").grid(row=0, column=1, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Preview").grid(row=0, column=2, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Color").grid(row=0, column=3, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Hex").grid(row=0, column=4, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Pick").grid(row=0, column=5, sticky=tk.W, padx=(0, 8))
 
         row = 1
         for zone in ALL_ZONES:
@@ -397,15 +410,13 @@ class MSIKLMGui(tk.Tk):
             self.zone_custom_hex[zone] = hex_var
             self.zone_include[zone] = include_var
 
-            check_state = tk.DISABLED if zone in PRIMARY_ZONES else tk.NORMAL
-            check_cmd = None if zone in PRIMARY_ZONES else (lambda z=zone: self._on_optional_toggle(z))
-            check = ttk.Checkbutton(zones_frame, variable=include_var, state=check_state, command=check_cmd)
+            check = ttk.Checkbutton(zones_frame, variable=include_var, command=lambda z=zone: self._on_include_toggle(z))
             check.grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
 
-            ttk.Label(zones_frame, text=zone.upper(), style="Muted.TLabel").grid(row=row, column=1, sticky=tk.W, padx=(0, 8), pady=3)
+            ttk.Label(zones_frame, text=zone.upper(), style="PanelAltMuted.TLabel").grid(row=row, column=1, sticky=tk.W, padx=(0, 8), pady=4)
 
-            swatch = tk.Canvas(zones_frame, width=18, height=18, bg=BG_PANEL, highlightthickness=0)
-            swatch.grid(row=row, column=2, sticky=tk.W, padx=(0, 8), pady=3)
+            swatch = tk.Canvas(zones_frame, width=18, height=18, bg=BG_PANEL_ALT, highlightthickness=0)
+            swatch.grid(row=row, column=2, sticky=tk.W, padx=(0, 8), pady=4)
             self.zone_swatch[zone] = swatch
 
             combo = ttk.Combobox(
@@ -413,20 +424,25 @@ class MSIKLMGui(tk.Tk):
                 values=COLOR_CHOICES,
                 textvariable=mode_var,
                 state="readonly",
-                width=10,
+                width=9,
             )
-            combo.grid(row=row, column=3, sticky=tk.W, padx=(0, 8), pady=3)
+            combo.grid(row=row, column=3, sticky=tk.EW, padx=(0, 8), pady=4)
             combo.bind("<<ComboboxSelected>>", lambda _evt, z=zone: self._on_zone_changed(z))
 
-            entry = ttk.Entry(zones_frame, textvariable=hex_var, width=9)
-            entry.grid(row=row, column=4, sticky=tk.W, padx=(0, 4), pady=3)
+            entry = ttk.Entry(zones_frame, textvariable=hex_var, width=8)
+            entry.grid(row=row, column=4, sticky=tk.EW, padx=(0, 4), pady=4)
             entry.bind("<KeyRelease>", lambda _evt, z=zone: self._on_zone_changed(z))
 
-            pick = ttk.Button(zones_frame, text="Pick", command=lambda z=zone: self._pick_color(z), width=6)
-            pick.grid(row=row, column=4, sticky=tk.W, pady=3)
+            pick = ttk.Button(zones_frame, text="Pick", command=lambda z=zone: self._pick_color(z), width=4)
+            pick.grid(row=row, column=5, sticky=tk.W, pady=4)
             row += 1
 
-        opts = ttk.LabelFrame(right, text="Apply Behavior", style="Card.TLabelframe", padding=8)
+        zones_frame.grid_columnconfigure(1, minsize=82)
+        zones_frame.grid_columnconfigure(3, weight=1, minsize=102)
+        zones_frame.grid_columnconfigure(4, weight=1, minsize=86)
+        zones_frame.grid_columnconfigure(5, minsize=56)
+
+        opts = ttk.LabelFrame(right, text="Apply Behavior", style="RightCard.TLabelframe", padding=10)
         opts.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Checkbutton(
@@ -468,12 +484,12 @@ class MSIKLMGui(tk.Tk):
         mode_combo.grid(row=2, column=1, sticky=tk.W, padx=(8, 0), pady=2)
         mode_combo.bind("<<ComboboxSelected>>", lambda _evt: self._update_command_preview())
 
-        actions = ttk.LabelFrame(right, text="Actions", style="Card.TLabelframe", padding=8)
+        actions = ttk.LabelFrame(right, text="Actions", style="RightCard.TLabelframe", padding=10)
         actions.pack(fill=tk.X, pady=(10, 0))
         ttk.Button(actions, text="Apply Colors", style="Accent.TButton", command=self._apply_colors).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Apply Mode Only", command=self._apply_mode_only).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Test Connection", command=self._test_connection).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Show CLI Help", command=self._show_help).pack(fill=tk.X, pady=2)
+        ttk.Button(actions, text="Apply Mode Only", style="Ghost.TButton", command=self._apply_mode_only).pack(fill=tk.X, pady=2)
+        ttk.Button(actions, text="Test Connection", style="Ghost.TButton", command=self._test_connection).pack(fill=tk.X, pady=2)
+        ttk.Button(actions, text="Show CLI Help", style="Ghost.TButton", command=self._show_help).pack(fill=tk.X, pady=2)
 
     def _set_defaults(self) -> None:
         for zone in PRIMARY_ZONES:
@@ -512,6 +528,12 @@ class MSIKLMGui(tk.Tk):
 
         self._on_zone_changed(changed_zone)
 
+    def _on_include_toggle(self, changed_zone: str) -> None:
+        if changed_zone in OPTIONAL_ZONES:
+            self._on_optional_toggle(changed_zone)
+            return
+        self._on_zone_changed(changed_zone)
+
     def _on_zone_changed(self, _zone: str) -> None:
         self._refresh_zone_swatches()
         self._update_command_preview()
@@ -539,6 +561,9 @@ class MSIKLMGui(tk.Tk):
         return PRESET_COLORS.get(mode, "#000000")
 
     def _zone_cli_value(self, zone: str) -> tuple[str, bool]:
+        if not self.zone_include[zone].get():
+            return "off", False
+
         mode = self.zone_color_mode[zone].get()
         if mode == "custom":
             normalized = normalize_hex(self.zone_custom_hex[zone].get())
@@ -714,7 +739,7 @@ class MSIKLMGui(tk.Tk):
 
     def _zone_visual_color(self, zone: str) -> str:
         base = self._zone_hex_or_fallback(zone)
-        if zone in OPTIONAL_ZONES and not self.zone_include[zone].get():
+        if not self.zone_include[zone].get():
             return darken(base, 0.18)
         return darken(base, 0.86)
 
@@ -773,7 +798,7 @@ class MSIKLMGui(tk.Tk):
                 y + (h / 2.0),
                 text=label,
                 fill=lighten(fill, 0.82),
-                font=("Sans", 8),
+                font=(FONT_UI, 8),
             )
 
         if zone in PRIMARY_ZONES:
@@ -794,97 +819,130 @@ class MSIKLMGui(tk.Tk):
 
     def _draw_optional_zone_badges(self) -> None:
         badges = [
-            ("logo", 515, 32, 90, 30, "Logo"),
-            ("front_left", 220, 356, 110, 24, "Front L"),
-            ("front_right", 640, 356, 110, 24, "Front R"),
-            ("mouse", 830, 184, 95, 36, "Mouse"),
+            ("logo", 808, 376, 102, 26, "Logo"),
+            ("front_left", 196, 376, 118, 24, "Front L"),
+            ("front_right", 618, 376, 118, 24, "Front R"),
+            ("mouse", 808, 330, 102, 34, "Mouse"),
         ]
         for zone, x, y, w, h, label in badges:
             fill = self._zone_visual_color(zone)
-            stroke = darken(fill, 0.45)
-            self._round_rect(x, y, x + w, y + h, 8, fill=fill, outline=stroke, width=2)
-            self.canvas.create_text(x + (w / 2), y + (h / 2), text=label, fill=lighten(fill, 0.75), font=("Sans", 8, "bold"))
+            stroke = darken(fill, 0.55)
+            self._round_rect(x, y, x + w, y + h, 8, fill=darken(fill, 0.88), outline=stroke, width=1)
+            self.canvas.create_text(
+                x + (w / 2),
+                y + (h / 2),
+                text=label,
+                fill=lighten(fill, 0.62),
+                font=(FONT_UI, 8, "bold"),
+            )
 
     def _draw_primary_zone_split(
         self,
         bounds: dict[str, list[float]],
         zone_rows: dict[str, dict[int, list[float]]],
     ) -> None:
-        colors = {"left": "#72a7ff", "middle": "#7ac3ff", "right": "#89d9ff"}
+        colors = {"left": "#5e86b8", "middle": "#6993bd", "right": "#749fbe"}
 
         for zone in PRIMARY_ZONES:
             x1, y1, x2, y2 = bounds[zone]
             if x2 <= x1:
                 continue
 
-            rows = sorted(zone_rows[zone].keys())
-            if rows:
-                for row in rows:
-                    rx1, ry1, rx2, ry2 = zone_rows[zone][row]
-                    self._round_rect(
-                        rx1 - 7,
-                        ry1 - 7,
-                        rx2 + 7,
-                        ry2 + 7,
-                        10,
-                        fill="",
-                        outline=darken(colors[zone], 0.8),
-                        width=1,
-                    )
-
+            chip_cx = (x1 + x2) / 2
+            chip_y = y1 - 30
+            chip_w = 118
+            self._round_rect(
+                chip_cx - (chip_w / 2),
+                chip_y - 4,
+                chip_cx + (chip_w / 2),
+                chip_y + 20,
+                10,
+                fill=darken(colors[zone], 0.28),
+                outline=darken(colors[zone], 0.78),
+                width=1,
+            )
             self.canvas.create_text(
-                (x1 + x2) / 2,
-                y1 - 22,
+                chip_cx,
+                chip_y + 10,
                 text=f"{zone.upper()} ZONE",
                 fill=colors[zone],
-                font=("Sans", 9, "bold"),
+                font=(FONT_UI, 9, "bold"),
             )
 
-        def seam_polyline(zone_a: str, zone_b: str) -> list[float]:
+        def seam_polyline(zone_a: str, zone_b: str) -> tuple[list[float], float]:
             rows = sorted(set(zone_rows[zone_a]).intersection(zone_rows[zone_b]))
             if not rows:
-                return []
+                return [], 0.0
 
-            margin = 9
-            points: list[float] = []
-            prev_x = 0.0
-            prev_bottom = 0.0
-            for idx, row in enumerate(rows):
+            # Each row produces one vertical seam segment, then we connect segments only in row gaps.
+            # tuple: (seam_x, top_y, bottom_y, min_allowed_x, max_allowed_x)
+            segments: list[tuple[float, float, float, float, float]] = []
+            narrowest_gap = 9999.0
+            inset = 5
+            for row in rows:
                 ax1, ay1, ax2, ay2 = zone_rows[zone_a][row]
                 bx1, by1, bx2, by2 = zone_rows[zone_b][row]
                 seam_x = (ax2 + bx1) / 2
-                top_y = min(ay1, by1) - margin
-                bottom_y = max(ay2, by2) + margin
+                top_y = min(ay1, by1) + inset
+                bottom_y = max(ay2, by2) - inset
+                if bottom_y <= top_y:
+                    top_y = min(ay1, by1) + 2
+                    bottom_y = max(ay2, by2) - 2
 
-                if idx == 0:
-                    points.extend([seam_x, top_y, seam_x, bottom_y])
+                # Keep seam inside the actual inter-zone gap for this row.
+                min_allowed = ax2 + 2
+                max_allowed = bx1 - 2
+                if max_allowed < min_allowed:
+                    min_allowed = max_allowed = seam_x
+                seam_x = max(min_allowed, min(max_allowed, seam_x))
+                narrowest_gap = min(narrowest_gap, max(0.0, bx1 - ax2))
+
+                segments.append((seam_x, top_y, bottom_y, min_allowed, max_allowed))
+
+            # Damp sharp horizontal jumps (mostly visible on middle|right seam near numpad/enter area).
+            smooth_segments: list[tuple[float, float, float]] = []
+            for idx, (x, top, bottom, min_allowed, max_allowed) in enumerate(segments):
+                if idx == 0 or idx == len(segments) - 1:
+                    smooth_x = x
                 else:
-                    connector_y = (prev_bottom + top_y) / 2.0
-                    points.extend(
-                        [
-                            prev_x,
-                            connector_y,
-                            seam_x,
-                            connector_y,
-                            seam_x,
-                            top_y,
-                            seam_x,
-                            bottom_y,
-                        ]
-                    )
+                    prev_x = segments[idx - 1][0]
+                    next_x = segments[idx + 1][0]
+                    smooth_x = (prev_x + (2.0 * x) + next_x) / 4.0
+                smooth_x = max(min_allowed, min(max_allowed, smooth_x))
+                smooth_segments.append((smooth_x, top, bottom))
 
-                prev_x = seam_x
-                prev_bottom = bottom_y
+            points: list[float] = []
+            x0, y0_top, y0_bottom = smooth_segments[0]
+            points.extend([x0, y0_top, x0, y0_bottom])
+            for idx in range(1, len(smooth_segments)):
+                prev_x, _prev_top, prev_bottom = smooth_segments[idx - 1]
+                x, top, bottom = smooth_segments[idx]
+                bridge_y = (prev_bottom + top) / 2.0
+                points.extend([prev_x, bridge_y, x, bridge_y, x, top, x, bottom])
 
-            return points
+            if narrowest_gap == 9999.0:
+                narrowest_gap = 0.0
+            return points, narrowest_gap
 
-        for seam in (seam_polyline("left", "middle"), seam_polyline("middle", "right")):
+        for seam, gap_width in (
+            seam_polyline("left", "middle"),
+            seam_polyline("middle", "right"),
+        ):
             if len(seam) < 4:
                 continue
+            glow_width = max(1.8, min(3.0, gap_width - 1.2))
+            core_width = max(1.0, glow_width - 1.2)
             self.canvas.create_line(
                 seam,
-                fill="#7aa9e6",
-                width=3,
+                fill=SEAM_GLOW,
+                width=glow_width,
+                capstyle=tk.ROUND,
+                joinstyle=tk.ROUND,
+            )
+            self.canvas.create_line(
+                seam,
+                fill=SEAM_COLOR,
+                width=core_width,
                 capstyle=tk.ROUND,
                 joinstyle=tk.ROUND,
             )
@@ -893,12 +951,13 @@ class MSIKLMGui(tk.Tk):
         self.canvas.delete("all")
 
         self._round_rect(18, 18, 948, 410, 22, fill="#0f1b30", outline="#2a4164", width=2)
+        self._round_rect(28, 24, 938, 56, 14, fill="#0d1a2d", outline="#223656", width=1)
         self.canvas.create_text(
             483,
-            34,
+            28,
             text="Keyboard Zone Layout",
             fill=FG_MAIN,
-            font=("Sans", 11, "bold"),
+            font=(FONT_UI, 11, "bold"),
         )
 
         unit = 31
@@ -935,7 +994,7 @@ class MSIKLMGui(tk.Tk):
                 text=zone + status,
                 fill=FG_MUTED,
                 anchor=tk.W,
-                font=("Sans", 8),
+                font=(FONT_UI, 8),
             )
             x += 128
 
