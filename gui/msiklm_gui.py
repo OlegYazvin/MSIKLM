@@ -171,11 +171,13 @@ VOICE_FRAME_SECONDS = 0.12
 VOICE_SAMPLE_RATE = 16000
 VOICE_SAMPLES_PER_FRAME = int(VOICE_SAMPLE_RATE * VOICE_FRAME_SECONDS)
 VOICE_AUTO_SOURCE = "Auto detect (try all)"
-VOICE_ATTACK_ALPHA = 0.58
-VOICE_RELEASE_ALPHA = 0.08
+VOICE_ATTACK_ALPHA = 0.66
+VOICE_RELEASE_ALPHA_ACTIVE = 0.18
+VOICE_RELEASE_ALPHA_SILENT = 0.06
 VOICE_BAR_DECAY = 0.90
 VOICE_SILENCE_HOLD_FRAMES = max(2, int(1.35 / VOICE_FRAME_SECONDS))
-VOICE_MIN_SEND_INTERVAL = 0.16
+VOICE_MIN_SEND_INTERVAL_ACTIVE = 0.08
+VOICE_MIN_SEND_INTERVAL_SILENT = 0.18
 VOICE_COMPAT_COLORS = ["red", "orange", "yellow", "green", "sky", "blue", "purple", "white"]
 
 
@@ -1148,7 +1150,10 @@ class MSIKLMGui(tk.Tk):
         if level > self._voice_smoothed_level:
             alpha = VOICE_ATTACK_ALPHA
         else:
-            alpha = VOICE_RELEASE_ALPHA
+            if level > threshold:
+                alpha = VOICE_RELEASE_ALPHA_ACTIVE
+            else:
+                alpha = VOICE_RELEASE_ALPHA_SILENT
         self._voice_smoothed_level += (level - self._voice_smoothed_level) * alpha
         smooth_level = self._voice_smoothed_level
 
@@ -1175,10 +1180,11 @@ class MSIKLMGui(tk.Tk):
             payload_key = cmd_args[0]
 
         now = time.monotonic()
+        send_interval = VOICE_MIN_SEND_INTERVAL_ACTIVE if smooth_level > threshold else VOICE_MIN_SEND_INTERVAL_SILENT
         should_send = (
             payload_key != self._voice_last_payload
             and (
-                (now - self._voice_last_send_ts) >= VOICE_MIN_SEND_INTERVAL
+                (now - self._voice_last_send_ts) >= send_interval
                 or self._voice_last_payload == ""
             )
         )
