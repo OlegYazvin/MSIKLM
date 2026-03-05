@@ -172,9 +172,11 @@ VOICE_SAMPLE_RATE = 16000
 VOICE_SAMPLES_PER_FRAME = int(VOICE_SAMPLE_RATE * VOICE_FRAME_SECONDS)
 VOICE_AUTO_SOURCE = "Auto detect (try all)"
 VOICE_ATTACK_ALPHA = 0.58
-VOICE_RELEASE_ALPHA = 0.14
-VOICE_BAR_DECAY = 0.80
-VOICE_SILENCE_HOLD_FRAMES = max(2, int(0.75 / VOICE_FRAME_SECONDS))
+VOICE_RELEASE_ALPHA = 0.08
+VOICE_BAR_DECAY = 0.90
+VOICE_SILENCE_HOLD_FRAMES = max(2, int(1.35 / VOICE_FRAME_SECONDS))
+VOICE_MIN_SEND_INTERVAL = 0.16
+VOICE_COMPAT_COLORS = ["red", "orange", "yellow", "green", "sky", "blue", "purple", "white"]
 
 
 def normalize_hex(value: str) -> str | None:
@@ -218,6 +220,43 @@ def blend_hex(hex_a: str, hex_b: str, ratio: float) -> str:
     rg = int(ag + ((bg - ag) * ratio))
     rb = int(ab + ((bb - ab) * ratio))
     return f"#{rr:02x}{rg:02x}{rb:02x}"
+
+
+class SimpleTooltip:
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self.tip_window: tk.Toplevel | None = None
+        self.widget.bind("<Enter>", self._show, add="+")
+        self.widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _event: tk.Event[tk.Widget]) -> None:
+        if self.tip_window is not None:
+            return
+        x = self.widget.winfo_rootx() + 16
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(
+            tip,
+            text=self.text,
+            bg="#0a1628",
+            fg="#dbe8ff",
+            padx=8,
+            pady=4,
+            bd=1,
+            relief=tk.SOLID,
+            font=(FONT_UI, 9),
+        )
+        label.pack()
+        self.tip_window = tip
+
+    def _hide(self, _event: tk.Event[tk.Widget]) -> None:
+        if self.tip_window is None:
+            return
+        self.tip_window.destroy()
+        self.tip_window = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -318,12 +357,14 @@ class MSIKLMGui(tk.Tk):
         self._voice_thread: threading.Thread | None = None
         self._voice_stop_event = threading.Event()
         self._voice_palette_phase = 0.0
-        self._voice_last_payload = "off,off,off"
+        self._voice_last_payload = ""
         self._voice_preview_hex = {zone: "#000000" for zone in PRIMARY_ZONES}
         self._voice_sources: list[tuple[str, list[str]]] = []
         self._voice_active_source = "none"
         self._voice_smoothed_level = 0.0
         self._voice_silence_frames = 0
+        self._voice_last_send_ts = 0.0
+        self._tooltips: list[SimpleTooltip] = []
         self._closing = False
 
         self._setup_styles()
@@ -417,7 +458,11 @@ class MSIKLMGui(tk.Tk):
 
         ttk.Label(
             left,
-            text="3-zone split (denoted on keyboard): LEFT | MIDDLE | RIGHT. Optional zones are shown as badges.",
+            text=(
+                "3-zone keyboard split: LEFT | MIDDLE | RIGHT. "
+                "On GT60-class models, numpad keys belong to RIGHT. "
+                "Optional non-keyboard zones are shown as badges."
+            ),
             style="Muted.TLabel",
             wraplength=940,
         ).pack(fill=tk.X, pady=(8, 6))
@@ -451,8 +496,13 @@ class MSIKLMGui(tk.Tk):
         ttk.Label(zones_frame, text="Color").grid(row=0, column=3, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Hex").grid(row=0, column=4, sticky=tk.W, padx=(0, 8))
         ttk.Label(zones_frame, text="Pick").grid(row=0, column=5, sticky=tk.W, padx=(0, 8))
+        ttk.Label(
+            zones_frame,
+            text="Keyboard note: RIGHT includes numpad on GT60 2OD.",
+            style="PanelAltMuted.TLabel",
+        ).grid(row=1, column=1, columnspan=5, sticky=tk.W, pady=(2, 6))
 
-        row = 1
+        row = 2
         for zone in ALL_ZONES:
             mode_var = tk.StringVar(value="blue" if zone in PRIMARY_ZONES else "off")
             hex_var = tk.StringVar(value="#0000ff" if zone in PRIMARY_ZONES else "#000000")
@@ -464,7 +514,12 @@ class MSIKLMGui(tk.Tk):
             check = ttk.Checkbutton(zones_frame, variable=include_var, command=lambda z=zone: self._on_include_toggle(z))
             check.grid(row=row, column=0, sticky=tk.W, padx=(0, 8), pady=3)
 
-            ttk.Label(zones_frame, text=zone.upper(), style="PanelAltMuted.TLabel").grid(row=row, column=1, sticky=tk.W, padx=(0, 8), pady=4)
+            zone_label = ttk.Label(zones_frame, text=zone.upper(), style="PanelAltMuted.TLabel")
+            zone_label.grid(row=row, column=1, sticky=tk.W, padx=(0, 8), pady=4)
+            if zone == "right":
+                tip_text = "RIGHT zone includes alphanumeric right cluster and numpad keys on GT60 2OD."
+                self._tooltips.append(SimpleTooltip(zone_label, tip_text))
+                self._tooltips.append(SimpleTooltip(check, tip_text))
 
             swatch = tk.Canvas(zones_frame, width=18, height=18, bg=BG_PANEL_ALT, highlightthickness=0)
             swatch.grid(row=row, column=2, sticky=tk.W, padx=(0, 8), pady=4)
@@ -951,12 +1006,22 @@ class MSIKLMGui(tk.Tk):
             messagebox.showerror("MSIKLM Not Found", "Could not find 'msiklm'. Build/install it first.")
             self.voice_mode_enabled.set(False)
             return
+        probe_ok, probe_err = self._run_msiklm_quiet(["help"], root_required=False)
+        if not probe_ok:
+            messagebox.showerror(
+                "MSIKLM Runtime Error",
+                "Voice mode cannot control the keyboard because the msiklm binary failed to start.\n"
+                f"Details: {probe_err}",
+            )
+            self.voice_mode_enabled.set(False)
+            return
 
         self._voice_stop_event.clear()
         self._voice_palette_phase = 0.0
         self._voice_last_payload = "off,off,off"
         self._voice_smoothed_level = 0.0
         self._voice_silence_frames = 0
+        self._voice_last_send_ts = 0.0
         self._voice_active_source = "probing..."
         self.voice_active_source_var.set("Active source: probing...")
         self.voice_status_var.set("Voice mode active. Probing microphone source...")
@@ -965,6 +1030,10 @@ class MSIKLMGui(tk.Tk):
         self._update_command_preview()
         listed_sources = ", ".join(label for label, _cmd in capture_sources)
         self._append_log(f"Voice source candidates: {listed_sources}")
+        if self.compat_mode.get():
+            self._append_log("Voice mode output path: compatibility (named colors + high brightness).")
+        else:
+            self._append_log("Voice mode output path: custom RGB.")
 
         self._voice_thread = threading.Thread(
             target=self._voice_worker,
@@ -1092,13 +1161,34 @@ class MSIKLMGui(tk.Tk):
         bars[0] = new_bars[0]
         bars[1] = new_bars[1]
         bars[2] = new_bars[2]
-        payload = ",".join(colors)
+        if self.compat_mode.get():
+            compat_colors: list[str] = []
+            for color in colors:
+                if color == "off":
+                    compat_colors.append("off")
+                else:
+                    compat_colors.append(self._nearest_voice_compat_color(color))
+            cmd_args = [",".join(compat_colors), "high"]
+            payload_key = "|".join(cmd_args)
+        else:
+            cmd_args = [",".join(colors)]
+            payload_key = cmd_args[0]
 
-        if payload != self._voice_last_payload:
-            ok, err = self._run_msiklm_quiet([payload], root_required=True)
+        now = time.monotonic()
+        should_send = (
+            payload_key != self._voice_last_payload
+            and (
+                (now - self._voice_last_send_ts) >= VOICE_MIN_SEND_INTERVAL
+                or self._voice_last_payload == ""
+            )
+        )
+
+        if should_send:
+            ok, err = self._run_msiklm_quiet(cmd_args, root_required=True)
             if not ok:
                 raise RuntimeError(err or "Voice write failed.")
-            self._voice_last_payload = payload
+            self._voice_last_payload = payload_key
+            self._voice_last_send_ts = now
         if not self._closing:
             self.after(0, lambda c=colors, b=bars.copy(), l=smooth_level: self._apply_voice_frame(c, b, l))
 
@@ -1157,6 +1247,29 @@ class MSIKLMGui(tk.Tk):
         left_hex = PRESET_COLORS[VOICE_COLOR_PATH[idx]]
         right_hex = PRESET_COLORS[VOICE_COLOR_PATH[next_idx]]
         return blend_hex(left_hex, right_hex, ratio)
+
+    @staticmethod
+    def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+        return (
+            int(hex_color[1:3], 16),
+            int(hex_color[3:5], 16),
+            int(hex_color[5:7], 16),
+        )
+
+    def _nearest_voice_compat_color(self, hex_color: str) -> str:
+        r, g, b = self._hex_to_rgb(hex_color)
+        best_name = "blue"
+        best_dist = 1 << 62
+        for name in VOICE_COMPAT_COLORS:
+            cr, cg, cb = self._hex_to_rgb(PRESET_COLORS[name])
+            dr = r - cr
+            dg = g - cg
+            db = b - cb
+            dist = (dr * dr) + (dg * dg) + (db * db)
+            if dist < best_dist:
+                best_dist = dist
+                best_name = name
+        return best_name
 
     def _voice_frame_colors(
         self,
@@ -1269,29 +1382,36 @@ class MSIKLMGui(tk.Tk):
 
         attempts = self._build_command_attempts(executable, args, root_required)
         first_error = ""
+        retry_count = 3 if self.compat_mode.get() and args and args[0] not in ("help", "list", "test") else 1
+
         for cmd in attempts:
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    text=True,
-                    capture_output=True,
-                    timeout=20,
-                    check=False,
-                )
-            except Exception as exc:  # pylint: disable=broad-except
-                text = f"{type(exc).__name__}: {exc}"
+            for attempt_idx in range(retry_count):
+                try:
+                    proc = subprocess.run(
+                        cmd,
+                        text=True,
+                        capture_output=True,
+                        timeout=20,
+                        check=False,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    text = f"{type(exc).__name__}: {exc}"
+                    if not first_error:
+                        first_error = text
+                    if attempt_idx + 1 < retry_count:
+                        time.sleep(0.06)
+                    continue
+
+                if proc.returncode == 0:
+                    return True, ""
+
+                output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+                if output and not first_error:
+                    first_error = output
                 if not first_error:
-                    first_error = text
-                continue
-
-            if proc.returncode == 0:
-                return True, ""
-
-            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
-            if output and not first_error:
-                first_error = output
-            if not first_error:
-                first_error = f"Command exited with code {proc.returncode}."
+                    first_error = f"Command exited with code {proc.returncode}."
+                if attempt_idx + 1 < retry_count:
+                    time.sleep(0.06)
 
         return False, first_error or "Command failed."
 
@@ -1384,7 +1504,10 @@ class MSIKLMGui(tk.Tk):
 
     def _update_command_preview(self) -> None:
         if self.voice_mode_enabled.get():
-            self.preview_var.set("voice mode active: microphone-reactive gradient stream (left,middle,right)")
+            if self.compat_mode.get():
+                self.preview_var.set("voice mode active: compatibility stream (named colors + high brightness)")
+            else:
+                self.preview_var.set("voice mode active: microphone-reactive custom RGB stream (left,middle,right)")
             return
         try:
             args = self._build_apply_args()
