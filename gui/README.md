@@ -7,8 +7,18 @@ sudo apt install python3-tk alsa-utils pulseaudio-utils
 python3 gui/msiklm_gui.py
 ```
 
-The GUI auto-relaunches itself as root (`pkexec` first, then `sudo`) so you should authenticate once
+The GUI auto-relaunches itself as root (`sudo` first, then `pkexec`) so you should authenticate once
 when opening the app, not on every color change.
+
+For passwordless launch after a one-time setup, use:
+
+```bash
+./install_ui.sh --passwordless-sudo
+```
+
+This installs a scoped sudoers rule for the current user (`msiklm` and
+`msiklm-gui --as-root` only). It requires system install to `/usr/local/bin`
+(do not use `--user-only`).
 
 The GUI can apply:
 - keyboard zones: `left`, `middle`, `right`

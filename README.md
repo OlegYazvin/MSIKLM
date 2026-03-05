@@ -140,6 +140,14 @@ The GUI auto-elevates itself (authenticate once on launch) and has a compatibili
 by default for devices that are unstable with repeated color writes. See `gui/README.md` for
 details and zone mapping assumptions.
 
+If you want passwordless GUI launch after one setup step, install with:
+
+    ./install_ui.sh --passwordless-sudo
+
+This writes a scoped sudoers rule for the current user that allows only
+`msiklm` and `msiklm-gui --as-root` without re-entering your password. This
+requires a system install to `/usr/local/bin` (not `--user-only`).
+
 Voice mode is also available while the GUI is running: it listens to microphone input, ignores
 manual color selections, and streams a 3-zone (`left -> middle -> right`) gradient visualizer.
 When microphone input falls below the configured threshold, all three keyboard zones are set to

@@ -8,6 +8,7 @@ set -eu
 SKIP_DEPS=0
 NO_PANEL_PIN=0
 FORCE_USER_INSTALL=0
+ENABLE_PASSWORDLESS_SUDO=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -20,6 +21,9 @@ while [ $# -gt 0 ]; do
         --user-only)
             FORCE_USER_INSTALL=1
             ;;
+        --passwordless-sudo)
+            ENABLE_PASSWORDLESS_SUDO=1
+            ;;
         -h|--help)
             cat <<'EOF'
 Usage: ./install_ui.sh [options]
@@ -28,6 +32,7 @@ Options:
   --skip-deps     Do not install distro packages.
   --no-panel-pin  Do not add the launcher to Cinnamon panel favorites.
   --user-only     Install binaries into ~/.local/bin only.
+  --passwordless-sudo  Allow current user to run msiklm-gui/msiklm via sudo without password.
   -h, --help      Show this help.
 EOF
             exit 0
@@ -118,6 +123,59 @@ install_file() {
 echo "[install] installing binaries into $BIN_DIR..."
 install_file "$SCRIPT_DIR/msiklm" "$BIN_DIR/msiklm"
 install_file "$SCRIPT_DIR/gui/msiklm_gui.py" "$BIN_DIR/msiklm-gui"
+
+configure_passwordless_sudo() {
+    if [ "$ENABLE_PASSWORDLESS_SUDO" -ne 1 ]; then
+        return 0
+    fi
+
+    if [ "$BIN_DIR" != "/usr/local/bin" ]; then
+        echo "[sudoers] passwordless mode requires installation to /usr/local/bin (do not use --user-only)." >&2
+        return 1
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "[sudoers] sudo is not available; skipping passwordless setup." >&2
+        return 0
+    fi
+
+    target_user="${SUDO_USER:-$(id -un)}"
+    if [ -z "$target_user" ] || [ "$target_user" = "root" ]; then
+        echo "[sudoers] could not determine a non-root target user; skipping." >&2
+        return 0
+    fi
+
+    gui_bin="$BIN_DIR/msiklm-gui"
+    cli_bin="$BIN_DIR/msiklm"
+    case "$gui_bin$cli_bin" in
+        *[[:space:]]*)
+            echo "[sudoers] binary path contains whitespace; skipping automatic sudoers rule." >&2
+            return 1
+            ;;
+    esac
+
+    rule_file="/etc/sudoers.d/msiklm-gui-$target_user"
+    tmp_file=$(mktemp)
+    cat >"$tmp_file" <<EOF
+# Managed by install_ui.sh for MSIKLM GUI passwordless relaunch.
+$target_user ALL=(root) NOPASSWD: $cli_bin
+$target_user ALL=(root) NOPASSWD: $gui_bin --as-root
+EOF
+
+    if command -v visudo >/dev/null 2>&1; then
+        if ! run_as_root visudo -cf "$tmp_file" >/dev/null 2>&1; then
+            echo "[sudoers] generated rule failed validation; skipping." >&2
+            rm -f "$tmp_file"
+            return 1
+        fi
+    fi
+
+    run_as_root install -m 0440 "$tmp_file" "$rule_file"
+    rm -f "$tmp_file"
+    echo "[sudoers] installed $rule_file"
+}
+
+configure_passwordless_sudo
 
 APP_DIR="$HOME/.local/share/applications"
 mkdir -p "$APP_DIR"

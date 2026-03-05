@@ -288,7 +288,10 @@ def relaunch_as_root(args: argparse.Namespace) -> None:
         )
 
     script = os.path.abspath(__file__)
-    relaunch_cmd = [sys.executable, script, "--as-root"]
+    if os.access(script, os.X_OK):
+        relaunch_cmd = [script, "--as-root"]
+    else:
+        relaunch_cmd = [sys.executable, script, "--as-root"]
 
     preserve_env: list[str] = []
     for var in (
@@ -304,12 +307,15 @@ def relaunch_as_root(args: argparse.Namespace) -> None:
         if val:
             preserve_env.append(f"{var}={val}")
 
-    if shutil.which("pkexec"):
-        code = subprocess.call(["pkexec", "env", *preserve_env, *relaunch_cmd])
+    if shutil.which("sudo"):
+        code = subprocess.call(["sudo", "-n", "-E", *relaunch_cmd])
         if code == 0:
             raise SystemExit(0)
-    if shutil.which("sudo"):
         code = subprocess.call(["sudo", "-E", *relaunch_cmd])
+        if code == 0:
+            raise SystemExit(0)
+    if shutil.which("pkexec"):
+        code = subprocess.call(["pkexec", "env", *preserve_env, *relaunch_cmd])
         if code == 0:
             raise SystemExit(0)
 
@@ -323,7 +329,7 @@ class MSIKLMGui(tk.Tk):
         super().__init__()
         self.title("MSIKLM GUI")
         self.geometry("1420x900")
-        self.minsize(1260, 780)
+        self.minsize(1020, 620)
         self.configure(bg=BG_APP)
         self.launched_as_root = launched_as_root
 
@@ -337,6 +343,9 @@ class MSIKLMGui(tk.Tk):
         self.test_button: ttk.Button | None = None
         self.voice_meter: tk.Canvas | None = None
         self.voice_source_combo: ttk.Combobox | None = None
+        self._right_scroll_canvas: tk.Canvas | None = None
+        self._right_scroll_window: int | None = None
+        self._right_mousewheel_bound = False
 
         self.use_brightness = tk.BooleanVar(value=False)
         self.use_mode = tk.BooleanVar(value=False)
@@ -450,10 +459,36 @@ class MSIKLMGui(tk.Tk):
         body.pack(fill=tk.BOTH, expand=True)
 
         left = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        right = ttk.Frame(body, style="PanelAlt.TFrame", padding=14, width=500)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
+        right_outer = ttk.Frame(body, style="PanelAlt.TFrame", width=500)
+        right_outer.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        right.pack_propagate(False)
+        right_outer.pack_propagate(False)
+
+        right_scroll_host = ttk.Frame(right_outer, style="PanelAlt.TFrame")
+        right_scroll_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self._right_scroll_canvas = tk.Canvas(
+            right_scroll_host,
+            bg=BG_PANEL_ALT,
+            highlightthickness=0,
+            bd=0,
+            relief=tk.FLAT,
+        )
+        right_scrollbar = ttk.Scrollbar(
+            right_scroll_host,
+            orient=tk.VERTICAL,
+            command=self._right_scroll_canvas.yview,
+        )
+        self._right_scroll_canvas.configure(yscrollcommand=right_scrollbar.set)
+        right_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._right_scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        right = ttk.Frame(self._right_scroll_canvas, style="PanelAlt.TFrame", padding=14)
+        self._right_scroll_window = self._right_scroll_canvas.create_window((0, 0), window=right, anchor=tk.NW)
+        self._right_scroll_canvas.bind("<Configure>", self._on_right_scroll_canvas_configure, add="+")
+        right.bind("<Configure>", self._on_right_scroll_content_configure, add="+")
+        right_outer.bind("<Enter>", self._enable_right_mousewheel, add="+")
+        right_outer.bind("<Leave>", self._disable_right_mousewheel, add="+")
 
         self.canvas = tk.Canvas(left, width=940, height=460, bg="#0a1628", highlightthickness=0)
         self.canvas.pack(fill=tk.X, expand=False)
@@ -663,8 +698,8 @@ class MSIKLMGui(tk.Tk):
         )
         voice.grid_columnconfigure(1, weight=1)
 
-        actions = ttk.LabelFrame(right, text="Actions", style="RightCard.TLabelframe", padding=10)
-        actions.pack(fill=tk.X, pady=(10, 0))
+        actions = ttk.LabelFrame(right_outer, text="Actions", style="RightCard.TLabelframe", padding=10)
+        actions.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=(10, 14))
         self.apply_button = ttk.Button(actions, text="Apply Colors", style="Accent.TButton", command=self._apply_colors)
         self.apply_button.pack(fill=tk.X, pady=2)
         self.mode_button = ttk.Button(actions, text="Apply Mode Only", style="Ghost.TButton", command=self._apply_mode_only)
@@ -811,6 +846,54 @@ class MSIKLMGui(tk.Tk):
         for widget in (self.apply_button, self.mode_button, self.test_button):
             if widget is not None:
                 widget.configure(state=state)
+
+    def _on_right_scroll_content_configure(self, _event: tk.Event[tk.Widget]) -> None:
+        if self._right_scroll_canvas is None:
+            return
+        bounds = self._right_scroll_canvas.bbox("all")
+        if bounds is not None:
+            self._right_scroll_canvas.configure(scrollregion=bounds)
+
+    def _on_right_scroll_canvas_configure(self, event: tk.Event[tk.Widget]) -> None:
+        if self._right_scroll_canvas is None or self._right_scroll_window is None:
+            return
+        self._right_scroll_canvas.itemconfigure(self._right_scroll_window, width=event.width)
+
+    def _enable_right_mousewheel(self, _event: tk.Event[tk.Widget]) -> None:
+        if self._right_mousewheel_bound:
+            return
+        self.bind_all("<MouseWheel>", self._on_right_mousewheel, add="+")
+        self.bind_all("<Button-4>", self._on_right_mousewheel, add="+")
+        self.bind_all("<Button-5>", self._on_right_mousewheel, add="+")
+        self._right_mousewheel_bound = True
+
+    def _disable_right_mousewheel(self, _event: tk.Event[tk.Widget] | None = None) -> None:
+        if not self._right_mousewheel_bound:
+            return
+        self.unbind_all("<MouseWheel>")
+        self.unbind_all("<Button-4>")
+        self.unbind_all("<Button-5>")
+        self._right_mousewheel_bound = False
+
+    def _on_right_mousewheel(self, event: tk.Event[tk.Widget]) -> None:
+        if self._right_scroll_canvas is None:
+            return
+        if getattr(event, "num", None) == 4:
+            self._right_scroll_canvas.yview_scroll(-1, "units")
+            return
+        if getattr(event, "num", None) == 5:
+            self._right_scroll_canvas.yview_scroll(1, "units")
+            return
+        delta = getattr(event, "delta", 0)
+        if delta == 0:
+            return
+        if sys.platform.startswith("win"):
+            steps = int(-delta / 120)
+            if steps == 0:
+                steps = -1 if delta > 0 else 1
+        else:
+            steps = -1 if delta > 0 else 1
+        self._right_scroll_canvas.yview_scroll(steps, "units")
 
     @staticmethod
     def _arecord_cmd(device: str | None = None) -> list[str]:
@@ -1373,10 +1456,11 @@ class MSIKLMGui(tk.Tk):
     def _build_command_attempts(self, executable: str, args: list[str], root_required: bool) -> list[list[str]]:
         if root_required and os.geteuid() != 0:
             attempts: list[list[str]] = []
+            if shutil.which("sudo"):
+                attempts.append(["sudo", "-n", executable, *args])
+                attempts.append(["sudo", executable, *args])
             if shutil.which("pkexec"):
                 attempts.append(["pkexec", executable, *args])
-            if shutil.which("sudo"):
-                attempts.append(["sudo", executable, *args])
             if attempts:
                 return attempts
         return [[executable, *args]]
@@ -1789,6 +1873,7 @@ class MSIKLMGui(tk.Tk):
         self._closing = True
         self.voice_mode_enabled.set(False)
         self._stop_voice_mode(push_off=False)
+        self._disable_right_mousewheel()
         self.destroy()
 
 
