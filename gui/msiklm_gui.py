@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import array
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 try:
@@ -164,6 +166,15 @@ SEAM_COLOR = "#4a607d"
 SEAM_GLOW = "#314861"
 FONT_UI = "DejaVu Sans"
 FONT_MONO = "DejaVu Sans Mono"
+VOICE_COLOR_PATH = ["blue", "sky", "green", "yellow", "orange", "red", "purple"]
+VOICE_FRAME_SECONDS = 0.12
+VOICE_SAMPLE_RATE = 16000
+VOICE_SAMPLES_PER_FRAME = int(VOICE_SAMPLE_RATE * VOICE_FRAME_SECONDS)
+VOICE_AUTO_SOURCE = "Auto detect (try all)"
+VOICE_ATTACK_ALPHA = 0.58
+VOICE_RELEASE_ALPHA = 0.14
+VOICE_BAR_DECAY = 0.80
+VOICE_SILENCE_HOLD_FRAMES = max(2, int(0.75 / VOICE_FRAME_SECONDS))
 
 
 def normalize_hex(value: str) -> str | None:
@@ -193,6 +204,20 @@ def lighten(hex_color: str, ratio: float) -> str:
     g = int(max(0, min(255, g + (255 - g) * ratio)))
     b = int(max(0, min(255, b + (255 - b) * ratio)))
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def blend_hex(hex_a: str, hex_b: str, ratio: float) -> str:
+    ratio = max(0.0, min(1.0, ratio))
+    ar = int(hex_a[1:3], 16)
+    ag = int(hex_a[3:5], 16)
+    ab = int(hex_a[5:7], 16)
+    br = int(hex_b[1:3], 16)
+    bg = int(hex_b[3:5], 16)
+    bb = int(hex_b[5:7], 16)
+    rr = int(ar + ((br - ar) * ratio))
+    rg = int(ag + ((bg - ag) * ratio))
+    rb = int(ab + ((bb - ab) * ratio))
+    return f"#{rr:02x}{rg:02x}{rb:02x}"
 
 
 def parse_args() -> argparse.Namespace:
@@ -266,15 +291,40 @@ class MSIKLMGui(tk.Tk):
         self.zone_include: dict[str, tk.BooleanVar] = {}
         self.zone_swatch: dict[str, tk.Canvas] = {}
         self._updating_optional = False
+        self.apply_button: ttk.Button | None = None
+        self.mode_button: ttk.Button | None = None
+        self.test_button: ttk.Button | None = None
+        self.voice_meter: tk.Canvas | None = None
+        self.voice_source_combo: ttk.Combobox | None = None
 
         self.use_brightness = tk.BooleanVar(value=False)
         self.use_mode = tk.BooleanVar(value=False)
         self.compat_mode = tk.BooleanVar(value=True)
         self.brightness = tk.StringVar(value="high")
         self.mode = tk.StringVar(value="normal")
+        self.voice_mode_enabled = tk.BooleanVar(value=False)
+        self.voice_source_var = tk.StringVar(value=VOICE_AUTO_SOURCE)
+        self.voice_gain = tk.DoubleVar(value=5.0)
+        self.voice_threshold = tk.DoubleVar(value=0.03)
+        self.voice_gain_label_var = tk.StringVar(value="5.00")
+        self.voice_threshold_label_var = tk.StringVar(value="0.030")
+        self.voice_status_var = tk.StringVar(value="Voice mode is off.")
+        self.voice_active_source_var = tk.StringVar(value="Active source: none")
         self.preview_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Ready.")
         self.binary_var = tk.StringVar(value="")
+        self._voice_gain_value = float(self.voice_gain.get())
+        self._voice_threshold_value = float(self.voice_threshold.get())
+        self._voice_thread: threading.Thread | None = None
+        self._voice_stop_event = threading.Event()
+        self._voice_palette_phase = 0.0
+        self._voice_last_payload = "off,off,off"
+        self._voice_preview_hex = {zone: "#000000" for zone in PRIMARY_ZONES}
+        self._voice_sources: list[tuple[str, list[str]]] = []
+        self._voice_active_source = "none"
+        self._voice_smoothed_level = 0.0
+        self._voice_silence_frames = 0
+        self._closing = False
 
         self._setup_styles()
         self._build_ui()
@@ -282,6 +332,7 @@ class MSIKLMGui(tk.Tk):
         self._refresh_binary_label()
         self._update_command_preview()
         self._redraw_keyboard()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _setup_styles(self) -> None:
         style = ttk.Style(self)
@@ -484,11 +535,85 @@ class MSIKLMGui(tk.Tk):
         mode_combo.grid(row=2, column=1, sticky=tk.W, padx=(8, 0), pady=2)
         mode_combo.bind("<<ComboboxSelected>>", lambda _evt: self._update_command_preview())
 
+        voice = ttk.LabelFrame(right, text="Voice Mode", style="RightCard.TLabelframe", padding=10)
+        voice.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Checkbutton(
+            voice,
+            text="Enable microphone reactive mode",
+            variable=self.voice_mode_enabled,
+            command=self._on_voice_toggle,
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 6))
+
+        ttk.Label(voice, text="Input", style="PanelAltMuted.TLabel").grid(row=1, column=0, sticky=tk.W)
+        self.voice_source_combo = ttk.Combobox(
+            voice,
+            values=[VOICE_AUTO_SOURCE],
+            textvariable=self.voice_source_var,
+            state="readonly",
+            width=26,
+        )
+        self.voice_source_combo.grid(row=1, column=1, sticky=tk.EW, padx=(8, 8))
+        ttk.Button(voice, text="Refresh", style="Ghost.TButton", command=self._refresh_voice_sources).grid(
+            row=1,
+            column=2,
+            sticky=tk.E,
+        )
+
+        ttk.Label(voice, text="Gain", style="PanelAltMuted.TLabel").grid(row=2, column=0, sticky=tk.W, pady=(4, 0))
+        gain_scale = ttk.Scale(
+            voice,
+            from_=1.0,
+            to=8.0,
+            variable=self.voice_gain,
+            command=lambda _value: self._on_voice_settings_changed(),
+            orient=tk.HORIZONTAL,
+        )
+        gain_scale.grid(row=2, column=1, sticky=tk.EW, padx=(8, 8), pady=(4, 0))
+        ttk.Label(voice, textvariable=self.voice_gain_label_var, style="PanelAltMuted.TLabel").grid(row=2, column=2, sticky=tk.E, pady=(4, 0))
+
+        ttk.Label(voice, text="Threshold", style="PanelAltMuted.TLabel").grid(row=3, column=0, sticky=tk.W, pady=(4, 0))
+        threshold_scale = ttk.Scale(
+            voice,
+            from_=0.005,
+            to=0.2,
+            variable=self.voice_threshold,
+            command=lambda _value: self._on_voice_settings_changed(),
+            orient=tk.HORIZONTAL,
+        )
+        threshold_scale.grid(row=3, column=1, sticky=tk.EW, padx=(8, 8), pady=(4, 0))
+        ttk.Label(voice, textvariable=self.voice_threshold_label_var, style="PanelAltMuted.TLabel").grid(
+            row=3,
+            column=2,
+            sticky=tk.E,
+            pady=(4, 0),
+        )
+
+        self.voice_meter = tk.Canvas(voice, width=420, height=36, bg="#0d1930", highlightthickness=1, highlightbackground="#2c4365")
+        self.voice_meter.grid(row=4, column=0, columnspan=3, sticky=tk.EW, pady=(8, 4))
+        ttk.Label(voice, textvariable=self.voice_status_var, style="PanelAltMuted.TLabel", wraplength=430).grid(
+            row=5,
+            column=0,
+            columnspan=3,
+            sticky=tk.W,
+        )
+        ttk.Label(voice, textvariable=self.voice_active_source_var, style="PanelAltMuted.TLabel", wraplength=430).grid(
+            row=6,
+            column=0,
+            columnspan=3,
+            sticky=tk.W,
+            pady=(2, 0),
+        )
+        voice.grid_columnconfigure(1, weight=1)
+
         actions = ttk.LabelFrame(right, text="Actions", style="RightCard.TLabelframe", padding=10)
         actions.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(actions, text="Apply Colors", style="Accent.TButton", command=self._apply_colors).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Apply Mode Only", style="Ghost.TButton", command=self._apply_mode_only).pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Test Connection", style="Ghost.TButton", command=self._test_connection).pack(fill=tk.X, pady=2)
+        self.apply_button = ttk.Button(actions, text="Apply Colors", style="Accent.TButton", command=self._apply_colors)
+        self.apply_button.pack(fill=tk.X, pady=2)
+        self.mode_button = ttk.Button(actions, text="Apply Mode Only", style="Ghost.TButton", command=self._apply_mode_only)
+        self.mode_button.pack(fill=tk.X, pady=2)
+        self.test_button = ttk.Button(actions, text="Test Connection", style="Ghost.TButton", command=self._test_connection)
+        self.test_button.pack(fill=tk.X, pady=2)
         ttk.Button(actions, text="Show CLI Help", style="Ghost.TButton", command=self._show_help).pack(fill=tk.X, pady=2)
 
     def _set_defaults(self) -> None:
@@ -501,6 +626,9 @@ class MSIKLMGui(tk.Tk):
             self.zone_custom_hex[zone].set("#000000")
             self.zone_include[zone].set(False)
         self._refresh_zone_swatches()
+        self._on_voice_settings_changed()
+        self._refresh_voice_sources()
+        self._draw_voice_meter([0.0, 0.0, 0.0])
 
     def _refresh_binary_label(self) -> None:
         binary = self._resolve_msiklm()
@@ -533,6 +661,12 @@ class MSIKLMGui(tk.Tk):
             self._on_optional_toggle(changed_zone)
             return
         self._on_zone_changed(changed_zone)
+
+    def _on_voice_settings_changed(self) -> None:
+        self._voice_gain_value = float(self.voice_gain.get())
+        self._voice_threshold_value = float(self.voice_threshold.get())
+        self.voice_gain_label_var.set(f"{self._voice_gain_value:.2f}")
+        self.voice_threshold_label_var.set(f"{self._voice_threshold_value:.3f}")
 
     def _on_zone_changed(self, _zone: str) -> None:
         self._refresh_zone_swatches()
@@ -615,6 +749,483 @@ class MSIKLMGui(tk.Tk):
             args.append(self.mode.get())
         return args
 
+    def _set_action_buttons_state(self, enabled: bool) -> None:
+        state = tk.NORMAL if enabled else tk.DISABLED
+        for widget in (self.apply_button, self.mode_button, self.test_button):
+            if widget is not None:
+                widget.configure(state=state)
+
+    @staticmethod
+    def _arecord_cmd(device: str | None = None) -> list[str]:
+        cmd = ["arecord", "-q"]
+        if device:
+            cmd.extend(["-D", device])
+        cmd.extend(
+            [
+                "-f",
+                "S16_LE",
+                "-c",
+                "1",
+                "-r",
+                str(VOICE_SAMPLE_RATE),
+                "-t",
+                "raw",
+            ]
+        )
+        return cmd
+
+    @staticmethod
+    def _parec_cmd(device: str | None = None) -> list[str]:
+        cmd = [
+            "parec",
+            "--raw",
+            "--format=s16le",
+            "--rate",
+            str(VOICE_SAMPLE_RATE),
+            "--channels",
+            "1",
+        ]
+        if device:
+            cmd.extend(["--device", device])
+        return cmd
+
+    def _detect_pulse_sources(self) -> list[tuple[str, list[str]]]:
+        if not shutil.which("parec"):
+            return []
+
+        sources: list[tuple[str, list[str]]] = [("Pulse default", self._parec_cmd())]
+        if not shutil.which("pactl"):
+            return sources
+
+        source_names: list[str] = []
+        default_source = ""
+        try:
+            proc = subprocess.run(
+                ["pactl", "get-default-source"],
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+            default_source = (proc.stdout or "").strip()
+        except Exception:  # pylint: disable=broad-except
+            default_source = ""
+
+        try:
+            proc = subprocess.run(
+                ["pactl", "list", "short", "sources"],
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:  # pylint: disable=broad-except
+            return sources
+
+        for raw_line in (proc.stdout or "").splitlines():
+            parts = raw_line.strip().split()
+            if len(parts) < 2:
+                continue
+            source_name = parts[1]
+            source_names.append(source_name)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        if default_source and default_source in source_names:
+            deduped.append(default_source)
+            seen.add(default_source)
+        for source_name in source_names:
+            if source_name in seen:
+                continue
+            deduped.append(source_name)
+            seen.add(source_name)
+
+        non_monitor = [name for name in deduped if not name.endswith(".monitor")]
+        monitors = [name for name in deduped if name.endswith(".monitor")]
+        source_names = non_monitor + monitors
+        for source_name in source_names:
+            sources.append((f"Pulse {source_name}", self._parec_cmd(source_name)))
+        return sources
+
+    def _detect_alsa_sources(self) -> list[tuple[str, list[str]]]:
+        if not shutil.which("arecord"):
+            return []
+
+        sources: list[tuple[str, list[str]]] = [("ALSA default", self._arecord_cmd())]
+        try:
+            proc = subprocess.run(
+                ["arecord", "-l"],
+                text=True,
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:  # pylint: disable=broad-except
+            return sources
+
+        seen_devices: set[str] = set()
+        for line in (proc.stdout or "").splitlines():
+            match = re.search(r"card\s+(\d+):.*device\s+(\d+):", line, re.IGNORECASE)
+            if not match:
+                continue
+            card_id = match.group(1)
+            device_id = match.group(2)
+            device_name = f"plughw:{card_id},{device_id}"
+            if device_name in seen_devices:
+                continue
+            seen_devices.add(device_name)
+            sources.append((f"ALSA card {card_id} device {device_id}", self._arecord_cmd(device_name)))
+        return sources
+
+    def _detect_voice_sources(self) -> list[tuple[str, list[str]]]:
+        candidates = self._detect_pulse_sources() + self._detect_alsa_sources()
+        unique: list[tuple[str, list[str]]] = []
+        seen_cmds: set[tuple[str, ...]] = set()
+        for label, cmd in candidates:
+            key = tuple(cmd)
+            if key in seen_cmds:
+                continue
+            seen_cmds.add(key)
+            unique.append((label, cmd))
+        return unique
+
+    def _refresh_voice_sources(self) -> None:
+        previous = self.voice_source_var.get()
+        self._voice_sources = self._detect_voice_sources()
+
+        values = [VOICE_AUTO_SOURCE]
+        values.extend(label for label, _cmd in self._voice_sources)
+        if self.voice_source_combo is not None:
+            self.voice_source_combo.configure(values=values)
+
+        if previous in values:
+            self.voice_source_var.set(previous)
+        else:
+            self.voice_source_var.set(VOICE_AUTO_SOURCE)
+
+        if self.voice_mode_enabled.get():
+            return
+        self._voice_active_source = "none"
+        self.voice_active_source_var.set("Active source: none")
+        if self._voice_sources:
+            self.voice_status_var.set(f"Voice mode is off. Detected {len(self._voice_sources)} input source(s).")
+        else:
+            self.voice_status_var.set("Voice mode is off. No compatible microphone source detected.")
+
+    def _selected_voice_sources(self) -> list[tuple[str, list[str]]]:
+        selected = self.voice_source_var.get()
+        if selected == VOICE_AUTO_SOURCE:
+            return list(self._voice_sources)
+        return [(label, cmd) for label, cmd in self._voice_sources if label == selected]
+
+    def _on_voice_toggle(self) -> None:
+        if self.voice_mode_enabled.get():
+            self._start_voice_mode()
+            return
+        self._stop_voice_mode(push_off=True)
+
+    def _start_voice_mode(self) -> None:
+        if os.geteuid() != 0:
+            messagebox.showerror(
+                "Voice Mode Requires Root",
+                "Voice mode streams continuous writes to the keyboard and requires an elevated GUI session.",
+            )
+            self.voice_mode_enabled.set(False)
+            return
+
+        if self._voice_thread and self._voice_thread.is_alive():
+            return
+
+        self._refresh_voice_sources()
+        capture_sources = self._selected_voice_sources()
+        if not capture_sources:
+            messagebox.showerror(
+                "Microphone Not Detected",
+                "No compatible microphone source was detected.\n"
+                "Install alsa-utils (arecord) and/or pulseaudio-utils (parec), then click Refresh.",
+            )
+            self.voice_mode_enabled.set(False)
+            return
+
+        if not self._resolve_msiklm():
+            messagebox.showerror("MSIKLM Not Found", "Could not find 'msiklm'. Build/install it first.")
+            self.voice_mode_enabled.set(False)
+            return
+
+        self._voice_stop_event.clear()
+        self._voice_palette_phase = 0.0
+        self._voice_last_payload = "off,off,off"
+        self._voice_smoothed_level = 0.0
+        self._voice_silence_frames = 0
+        self._voice_active_source = "probing..."
+        self.voice_active_source_var.set("Active source: probing...")
+        self.voice_status_var.set("Voice mode active. Probing microphone source...")
+        self.status_var.set("Voice mode active.")
+        self._set_action_buttons_state(False)
+        self._update_command_preview()
+        listed_sources = ", ".join(label for label, _cmd in capture_sources)
+        self._append_log(f"Voice source candidates: {listed_sources}")
+
+        self._voice_thread = threading.Thread(
+            target=self._voice_worker,
+            args=(capture_sources,),
+            daemon=True,
+        )
+        self._voice_thread.start()
+
+    def _stop_voice_mode(self, push_off: bool) -> None:
+        self._voice_stop_event.set()
+        thread = self._voice_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=1.5)
+        self._voice_thread = None
+
+        self.voice_status_var.set("Voice mode is off.")
+        self._voice_active_source = "none"
+        self.voice_active_source_var.set("Active source: none")
+        self.status_var.set("Ready.")
+        self._set_action_buttons_state(True)
+
+        for zone in PRIMARY_ZONES:
+            self._voice_preview_hex[zone] = "#000000"
+        self._draw_voice_meter([0.0, 0.0, 0.0])
+        self._refresh_zone_swatches()
+        self._redraw_keyboard()
+        self._update_command_preview()
+
+        if push_off:
+            self._run_msiklm_quiet(["off,off,off"], root_required=True)
+
+    def _voice_worker(self, capture_sources: list[tuple[str, list[str]]]) -> None:
+        process: subprocess.Popen[bytes] | None = None
+        bars = [0.0, 0.0, 0.0]
+        ended_with_error = ""
+        chunk_bytes = VOICE_SAMPLES_PER_FRAME * 2
+
+        try:
+            selected_label = ""
+            for source_label, capture_cmd in capture_sources:
+                if self._voice_stop_event.is_set():
+                    break
+                try:
+                    process = subprocess.Popen(
+                        capture_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        bufsize=0,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    ended_with_error = f"{source_label}: failed to open stream ({exc})"
+                    process = None
+                    continue
+
+                if process.stdout is None:
+                    ended_with_error = f"{source_label}: stream unavailable."
+                    self._terminate_process(process)
+                    process = None
+                    continue
+
+                probe_data = process.stdout.read(chunk_bytes)
+                if probe_data:
+                    selected_label = source_label
+                    if not self._closing:
+                        self.after(0, lambda lbl=source_label: self._set_active_voice_source(lbl))
+                    try:
+                        self._process_voice_chunk(probe_data, bars)
+                    except RuntimeError as exc:
+                        ended_with_error = f"{source_label}: {exc}"
+                        self._terminate_process(process)
+                        process = None
+                        continue
+                    break
+
+                self._terminate_process(process)
+                process = None
+                ended_with_error = f"{source_label}: no audio stream data."
+
+            if process is None:
+                if not ended_with_error:
+                    ended_with_error = "No microphone source produced an audio stream."
+                return
+
+            while not self._voice_stop_event.is_set():
+                if process.stdout is None:
+                    ended_with_error = f"{selected_label}: stream unavailable."
+                    break
+                data = process.stdout.read(chunk_bytes)
+                if not data:
+                    ended_with_error = f"{selected_label}: stream ended."
+                    break
+                try:
+                    self._process_voice_chunk(data, bars)
+                except RuntimeError as exc:
+                    ended_with_error = f"{selected_label}: {exc}"
+                    break
+        finally:
+            self._terminate_process(process)
+            if not self._closing:
+                self.after(0, lambda msg=ended_with_error: self._voice_worker_finished(msg))
+
+    def _set_active_voice_source(self, source_label: str) -> None:
+        self._voice_active_source = source_label
+        self.voice_active_source_var.set(f"Active source: {source_label}")
+        self.voice_status_var.set(f"Voice mode active on {source_label}.")
+        self._append_log(f"Voice source in use: {source_label}")
+
+    def _process_voice_chunk(self, data: bytes, bars: list[float]) -> None:
+        raw_level = self._pcm16_rms(data)
+        level = min(1.0, raw_level * self._voice_gain_value)
+        threshold = self._voice_threshold_value
+        if level > self._voice_smoothed_level:
+            alpha = VOICE_ATTACK_ALPHA
+        else:
+            alpha = VOICE_RELEASE_ALPHA
+        self._voice_smoothed_level += (level - self._voice_smoothed_level) * alpha
+        smooth_level = self._voice_smoothed_level
+
+        if smooth_level <= threshold:
+            self._voice_silence_frames += 1
+        else:
+            self._voice_silence_frames = 0
+
+        colors, new_bars = self._voice_frame_colors(smooth_level, threshold, bars, self._voice_silence_frames)
+        bars[0] = new_bars[0]
+        bars[1] = new_bars[1]
+        bars[2] = new_bars[2]
+        payload = ",".join(colors)
+
+        if payload != self._voice_last_payload:
+            ok, err = self._run_msiklm_quiet([payload], root_required=True)
+            if not ok:
+                raise RuntimeError(err or "Voice write failed.")
+            self._voice_last_payload = payload
+        if not self._closing:
+            self.after(0, lambda c=colors, b=bars.copy(), l=smooth_level: self._apply_voice_frame(c, b, l))
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[bytes] | None) -> None:
+        if process is None:
+            return
+        try:
+            process.terminate()
+        except Exception:  # pylint: disable=broad-except
+            pass
+        try:
+            process.wait(timeout=0.8)
+        except Exception:  # pylint: disable=broad-except
+            try:
+                process.kill()
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+    def _voice_worker_finished(self, error_message: str) -> None:
+        if self._closing:
+            return
+        was_enabled = self.voice_mode_enabled.get()
+        self.voice_mode_enabled.set(False)
+        self._stop_voice_mode(push_off=was_enabled)
+        if was_enabled and error_message:
+            self.voice_status_var.set(f"Voice mode stopped: {error_message}")
+            self.status_var.set("Voice mode failed.")
+            self._append_log(error_message)
+
+    @staticmethod
+    def _pcm16_rms(data: bytes) -> float:
+        if len(data) < 2:
+            return 0.0
+        clipped = data[: len(data) - (len(data) % 2)]
+        if not clipped:
+            return 0.0
+        samples = array.array("h")
+        samples.frombytes(clipped)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if not samples:
+            return 0.0
+        energy = 0
+        for value in samples:
+            energy += int(value) * int(value)
+        rms = (energy / len(samples)) ** 0.5
+        return rms / 32768.0
+
+    def _palette_hex(self, phase: float) -> str:
+        palette_size = len(VOICE_COLOR_PATH)
+        wrapped = phase % palette_size
+        idx = int(wrapped)
+        next_idx = (idx + 1) % palette_size
+        ratio = wrapped - idx
+        left_hex = PRESET_COLORS[VOICE_COLOR_PATH[idx]]
+        right_hex = PRESET_COLORS[VOICE_COLOR_PATH[next_idx]]
+        return blend_hex(left_hex, right_hex, ratio)
+
+    def _voice_frame_colors(
+        self,
+        level: float,
+        threshold: float,
+        previous_bars: list[float],
+        silence_frames: int,
+    ) -> tuple[list[str], list[float]]:
+        if level <= threshold:
+            bars = [value * VOICE_BAR_DECAY for value in previous_bars]
+            if silence_frames >= VOICE_SILENCE_HOLD_FRAMES and max(bars) < 0.035:
+                self._voice_palette_phase = (self._voice_palette_phase + 0.05) % len(VOICE_COLOR_PATH)
+                return ["off", "off", "off"], [0.0, 0.0, 0.0]
+            self._voice_palette_phase = (self._voice_palette_phase + 0.04) % len(VOICE_COLOR_PATH)
+        else:
+            active = (level - threshold) / max(0.001, 1.0 - threshold)
+            active = max(0.0, min(1.0, active))
+            self._voice_palette_phase = (self._voice_palette_phase + 0.09 + (active * 0.28)) % len(VOICE_COLOR_PATH)
+
+            bars = [0.0, 0.0, 0.0]
+            bars[0] = active
+            bars[1] = max(active * 0.66, previous_bars[0] * 0.84)
+            bars[2] = max(active * 0.44, previous_bars[1] * 0.82)
+
+        colors: list[str] = []
+        for idx, bar in enumerate(bars):
+            if bar < 0.02:
+                colors.append("off")
+                continue
+            phase = self._voice_palette_phase + (idx * 0.58)
+            base = self._palette_hex(phase)
+            strength = 0.16 + (0.76 * bar)
+            colors.append(blend_hex("#000000", base, strength))
+        return colors, bars
+
+    def _apply_voice_frame(self, colors: list[str], bars: list[float], level: float) -> None:
+        for zone, color in zip(PRIMARY_ZONES, colors):
+            if color == "off":
+                self._voice_preview_hex[zone] = "#000000"
+            else:
+                self._voice_preview_hex[zone] = color
+        self.voice_status_var.set(
+            f"Voice mode active on {self._voice_active_source}. "
+            f"Input level: {level:.2f} (threshold {self._voice_threshold_value:.2f})"
+        )
+        self._draw_voice_meter(bars)
+        self._refresh_zone_swatches()
+        self._redraw_keyboard()
+
+    def _draw_voice_meter(self, bars: list[float]) -> None:
+        if self.voice_meter is None:
+            return
+        canvas = self.voice_meter
+        canvas.delete("all")
+        width = int(canvas.cget("width"))
+        height = int(canvas.cget("height"))
+        pad = 6
+        gap = 6
+        bar_w = (width - (2 * pad) - (2 * gap)) / 3.0
+        for idx, value in enumerate(bars):
+            x1 = pad + idx * (bar_w + gap)
+            x2 = x1 + bar_w
+            y2 = height - pad
+            y1 = pad + ((1.0 - max(0.0, min(1.0, value))) * (height - (2 * pad)))
+            phase = self._voice_palette_phase + (idx * 0.58)
+            fill = self._palette_hex(phase) if value > 0.03 else "#1a2740"
+            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=darken(fill, 0.55), width=1)
+            canvas.create_text((x1 + x2) / 2, y2 - 2, text=PRIMARY_ZONES[idx].upper(), fill="#adc4e8", anchor=tk.S)
+
     def _set_log(self, text: str) -> None:
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete("1.0", tk.END)
@@ -650,6 +1261,39 @@ class MSIKLMGui(tk.Tk):
             if attempts:
                 return attempts
         return [[executable, *args]]
+
+    def _run_msiklm_quiet(self, args: list[str], root_required: bool = True) -> tuple[bool, str]:
+        executable = self._resolve_msiklm()
+        if not executable:
+            return False, "Could not find 'msiklm'."
+
+        attempts = self._build_command_attempts(executable, args, root_required)
+        first_error = ""
+        for cmd in attempts:
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                text = f"{type(exc).__name__}: {exc}"
+                if not first_error:
+                    first_error = text
+                continue
+
+            if proc.returncode == 0:
+                return True, ""
+
+            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+            if output and not first_error:
+                first_error = output
+            if not first_error:
+                first_error = f"Command exited with code {proc.returncode}."
+
+        return False, first_error or "Command failed."
 
     def _run_msiklm(self, args: list[str], root_required: bool = True) -> None:
         executable = self._resolve_msiklm()
@@ -712,6 +1356,9 @@ class MSIKLMGui(tk.Tk):
         messagebox.showerror("Command Failed", first_error or "Unknown error while running msiklm.")
 
     def _apply_colors(self) -> None:
+        if self.voice_mode_enabled.get():
+            messagebox.showinfo("Voice Mode Active", "Disable voice mode before applying manual colors.")
+            return
         try:
             args = self._build_apply_args()
         except ValueError as err:
@@ -721,15 +1368,24 @@ class MSIKLMGui(tk.Tk):
         self._update_command_preview()
 
     def _apply_mode_only(self) -> None:
+        if self.voice_mode_enabled.get():
+            messagebox.showinfo("Voice Mode Active", "Disable voice mode before applying mode-only commands.")
+            return
         self._run_msiklm([self.mode.get()], root_required=True)
 
     def _test_connection(self) -> None:
+        if self.voice_mode_enabled.get():
+            messagebox.showinfo("Voice Mode Active", "Disable voice mode before running a connection test.")
+            return
         self._run_msiklm(["test"], root_required=True)
 
     def _show_help(self) -> None:
         self._run_msiklm(["help"], root_required=False)
 
     def _update_command_preview(self) -> None:
+        if self.voice_mode_enabled.get():
+            self.preview_var.set("voice mode active: microphone-reactive gradient stream (left,middle,right)")
+            return
         try:
             args = self._build_apply_args()
             prefix = "msiklm" if os.geteuid() == 0 else "sudo msiklm"
@@ -738,6 +1394,8 @@ class MSIKLMGui(tk.Tk):
             self.preview_var.set(f"Invalid: {err}")
 
     def _zone_visual_color(self, zone: str) -> str:
+        if self.voice_mode_enabled.get() and zone in PRIMARY_ZONES:
+            return darken(self._voice_preview_hex[zone], 0.86)
         base = self._zone_hex_or_fallback(zone)
         if not self.zone_include[zone].get():
             return darken(base, 0.18)
@@ -997,6 +1655,12 @@ class MSIKLMGui(tk.Tk):
                 font=(FONT_UI, 8),
             )
             x += 128
+
+    def _on_close(self) -> None:
+        self._closing = True
+        self.voice_mode_enabled.set(False)
+        self._stop_voice_mode(push_off=False)
+        self.destroy()
 
 
 def main() -> None:

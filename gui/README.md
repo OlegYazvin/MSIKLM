@@ -3,7 +3,7 @@
 This folder contains a Tkinter GUI for `msiklm`:
 
 ```bash
-sudo apt install python3-tk
+sudo apt install python3-tk alsa-utils pulseaudio-utils
 python3 gui/msiklm_gui.py
 ```
 
@@ -17,6 +17,12 @@ The GUI can apply:
 It includes a default-on compatibility mode that improves reliability on keyboards that stop
 responding after one color write by using the known stable command path for named colors and
 retrying writes.
+
+Voice mode is available while the GUI is open. It uses microphone input (`arecord`) to drive a
+sequential 3-zone gradient visualizer (`left -> middle -> right`) and ignores manual color
+selection while enabled. If input is below threshold, all keyboard zones are forced to `off`.
+If the default microphone does not work, use the built-in input source selector and `Refresh`
+to detect available ALSA/Pulse sources.
 
 ## Zone-To-Key Outline Used In The GUI
 

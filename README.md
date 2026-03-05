@@ -131,7 +131,7 @@ An optional Tkinter GUI wrapper is available in:
 
 Run it with:
 
-    sudo apt install python3-tk
+    sudo apt install python3-tk alsa-utils pulseaudio-utils
     python3 gui/msiklm_gui.py
 
 The GUI supports setting colors for the `left`, `middle`, `right` keyboard zones and optional
@@ -139,6 +139,11 @@ zones (`logo`, `front_left`, `front_right`, `mouse`), then applies settings by e
 The GUI auto-elevates itself (authenticate once on launch) and has a compatibility mode enabled
 by default for devices that are unstable with repeated color writes. See `gui/README.md` for
 details and zone mapping assumptions.
+
+Voice mode is also available while the GUI is running: it listens to microphone input, ignores
+manual color selections, and streams a 3-zone (`left -> middle -> right`) gradient visualizer.
+When microphone input falls below the configured threshold, all three keyboard zones are set to
+`off`. The GUI includes microphone source detection with an input selector and refresh action.
 
 
 # Device Support

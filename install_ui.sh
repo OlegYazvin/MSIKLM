@@ -66,23 +66,23 @@ try_install_packages() {
 
     echo "[deps] installing required packages..."
     if command -v apt >/dev/null 2>&1; then
-        run_as_root apt install -y gcc make libhidapi-dev python3-tk desktop-file-utils
+        run_as_root apt install -y gcc make libhidapi-dev python3-tk desktop-file-utils alsa-utils pulseaudio-utils
         return $?
     fi
     if command -v dnf >/dev/null 2>&1; then
-        run_as_root dnf install -y gcc make hidapi-devel python3-tkinter desktop-file-utils
+        run_as_root dnf install -y gcc make hidapi-devel python3-tkinter desktop-file-utils alsa-utils pulseaudio-utils
         return $?
     fi
     if command -v yum >/dev/null 2>&1; then
-        run_as_root yum install -y gcc make hidapi-devel python3-tkinter desktop-file-utils
+        run_as_root yum install -y gcc make hidapi-devel python3-tkinter desktop-file-utils alsa-utils pulseaudio-utils
         return $?
     fi
     if command -v pacman >/dev/null 2>&1; then
-        run_as_root pacman -S --noconfirm gcc make hidapi tk desktop-file-utils
+        run_as_root pacman -S --noconfirm gcc make hidapi tk desktop-file-utils alsa-utils libpulse
         return $?
     fi
     if command -v zypper >/dev/null 2>&1; then
-        run_as_root zypper --non-interactive install gcc make libhidapi-devel python3-tk desktop-file-utils
+        run_as_root zypper --non-interactive install gcc make libhidapi-devel python3-tk desktop-file-utils alsa-utils pulseaudio-utils
         return $?
     fi
 
