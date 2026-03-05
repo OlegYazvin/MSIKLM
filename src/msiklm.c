@@ -128,35 +128,50 @@ int parse_color(const char* color_str, struct color* result)
                     result->profile = custom;
 
                     size_t length = strlen(color_str);
-                    char* color_rgb = (char*)malloc(length * sizeof(char));
-                    strcpy(color_rgb, &color_str[1]); //copy the string and skip the '['-sign
-                    color_rgb[length] = '\0';
-
-                    char* saved_ptr = NULL;
-                    char* end_ptr = NULL;
-
-                    //try to parse the red value
-                    long val = strtol(strtok_r(color_rgb, ";", &saved_ptr), &end_ptr, 10);
-                    if (*end_ptr == '\0' && *saved_ptr != '\0' && val >= 0 && val <= 255)
+                    char* color_rgb = (char*)malloc((length + 1) * sizeof(char));
+                    if (color_rgb != NULL)
                     {
-                        result->red = (byte)val;
+                        strcpy(color_rgb, &color_str[1]); //copy the string and skip the '['-sign
+                        color_rgb[length] = '\0';
 
-                        //try to parse the green value
-                        val = strtol(strtok_r(NULL, ";", &saved_ptr), &end_ptr, 10);
-                        if (*end_ptr == '\0' && *saved_ptr != '\0' && val >= 0 && val <= 255)
+                        char* saved_ptr = NULL;
+                        char* end_ptr = NULL;
+
+                        //try to parse the red value
+                        char* token = strtok_r(color_rgb, ";", &saved_ptr);
+                        if (token != NULL)
                         {
-                            result->green = (byte)val;
-
-                            //finally try to parse the blue value
-                            val = strtol(strtok_r(NULL, "]", &saved_ptr), &end_ptr, 10);
-                            if (*end_ptr == '\0' && *saved_ptr == '\0' && val >= 0 && val <= 255)
+                            long val = strtol(token, &end_ptr, 10);
+                            if (*end_ptr == '\0' && *saved_ptr != '\0' && val >= 0 && val <= 255)
                             {
-                                result->blue = (byte)val;
-                                ret = 0;
+                                result->red = (byte)val;
+
+                                //try to parse the green value
+                                token = strtok_r(NULL, ";", &saved_ptr);
+                                if (token != NULL)
+                                {
+                                    val = strtol(token, &end_ptr, 10);
+                                    if (*end_ptr == '\0' && *saved_ptr != '\0' && val >= 0 && val <= 255)
+                                    {
+                                        result->green = (byte)val;
+
+                                        //finally try to parse the blue value
+                                        token = strtok_r(NULL, "]", &saved_ptr);
+                                        if (token != NULL)
+                                        {
+                                            val = strtol(token, &end_ptr, 10);
+                                            if (*end_ptr == '\0' && *saved_ptr == '\0' && val >= 0 && val <= 255)
+                                            {
+                                                result->blue = (byte)val;
+                                                ret = 0;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
+                        free(color_rgb);
                     }
-                    free(color_rgb);
                 }
                 break;
 
@@ -337,18 +352,22 @@ int set_color(hid_device* dev, struct color color, enum region region, enum brig
         buffer[3] = (byte)region;
         buffer[7] = 236; //EOR (end of request)
 
-        if (brightness == rgb) //full rgb selection -> rgb-command
+        if (brightness == rgb && color.profile == custom) //full rgb selection for custom colors -> rgb-command
         {
             buffer[2] = 64; //rgb
             buffer[4] = color.red;
             buffer[5] = color.green;
             buffer[6] = color.blue;
         }
-        else //predefined color with explicit brightness -> set-command
+        else //predefined color with explicit brightness or default compatibility fallback -> set-command
         {
+            enum brightness effective_brightness = brightness;
+            if (effective_brightness == rgb)
+                effective_brightness = color.profile != none ? high : off;
+
             buffer[2] = 66; //set
-            buffer[4] = brightness != off ? (byte)color.profile : 0;
-            buffer[5] = (byte)brightness;
+            buffer[4] = effective_brightness != off ? (byte)color.profile : 0;
+            buffer[5] = (byte)effective_brightness;
             buffer[6] = 0;
         }
 

@@ -7,6 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+    #include <unistd.h>
+#endif
 #include "msiklm.h"
 
 //the following macros can be used for colored text output
@@ -31,6 +34,41 @@
     #define KCYN     ""
     #define KWHT     ""
 #endif
+
+#define WRITE_RETRY_COUNT 3
+#define WRITE_RETRY_DELAY_US 80000
+
+int set_color_with_retry(hid_device* dev, struct color color, enum region region, enum brightness brightness)
+{
+    int ret = -1;
+    for (int i=0; i<WRITE_RETRY_COUNT; ++i)
+    {
+        ret = set_color(dev, color, region, brightness);
+        if (ret > 0)
+            break;
+#ifndef _WIN32
+        if (i + 1 < WRITE_RETRY_COUNT)
+            usleep(WRITE_RETRY_DELAY_US);
+#endif
+    }
+    return ret;
+}
+
+int set_mode_with_retry(hid_device* dev, enum mode mode)
+{
+    int ret = -1;
+    for (int i=0; i<WRITE_RETRY_COUNT; ++i)
+    {
+        ret = set_mode(dev, mode);
+        if (ret > 0)
+            break;
+#ifndef _WIN32
+        if (i + 1 < WRITE_RETRY_COUNT)
+            usleep(WRITE_RETRY_DELAY_US);
+#endif
+    }
+    return ret;
+}
 
 /**
  * @brief prints help information
@@ -362,10 +400,10 @@ int main(int argc, char** argv)
             }
 
             for (int i=0; i<num_regions && ret == 0; ++i)
-                if (set_color(dev, colors[i], i+1, br) <= 0)
+                if (set_color_with_retry(dev, colors[i], i+1, br) <= 0)
                     ret = -1;
 
-            if (ret == 0 && set_mode(dev, md) <= 0)
+            if (ret == 0 && set_mode_with_retry(dev, md) <= 0)
                 ret = -1;
 
             hid_close(dev);
