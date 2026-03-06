@@ -381,7 +381,7 @@ class MSIKLMGui(tk.Tk):
 
         self.use_brightness = tk.BooleanVar(value=False)
         self.use_mode = tk.BooleanVar(value=False)
-        self.compat_mode = tk.BooleanVar(value=True)
+        self.compat_mode = tk.BooleanVar(value=False)
         self.brightness = tk.StringVar(value="high")
         self.mode = tk.StringVar(value="normal")
         self.voice_mode_enabled = tk.BooleanVar(value=False)
@@ -722,7 +722,7 @@ class MSIKLMGui(tk.Tk):
 
         ttk.Checkbutton(
             opts,
-            text="Compatibility mode (recommended)",
+            text="Compatibility mode (for unstable devices)",
             variable=self.compat_mode,
             command=self._update_command_preview,
         ).grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=2)

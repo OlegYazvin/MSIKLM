@@ -25,9 +25,9 @@ The GUI can apply:
 - keyboard zones: `left`, `middle`, `right`
 - optional non-keyboard zones: `logo`, `front_left`, `front_right`, `mouse`
 
-It includes a default-on compatibility mode that improves reliability on keyboards that stop
-responding after one color write by using the known stable command path for named colors and
-retrying writes.
+It includes an optional compatibility mode (off by default) that improves reliability on
+keyboards that stop responding after one color write by using the known stable command path for
+named colors and retrying writes.
 
 Voice mode is available while the GUI is open. It uses microphone input (`arecord`) to drive a
 sequential 3-zone gradient visualizer (`left -> middle -> right`) and ignores manual color

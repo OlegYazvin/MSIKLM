@@ -136,9 +136,10 @@ Run it with:
 
 The GUI supports setting colors for the `left`, `middle`, `right` keyboard zones and optional
 zones (`logo`, `front_left`, `front_right`, `mouse`), then applies settings by executing `msiklm`.
-The GUI auto-elevates itself (authenticate once on launch) and has a compatibility mode enabled
-by default for devices that are unstable with repeated color writes. See `gui/README.md` for
-details and zone mapping assumptions.
+The GUI auto-elevates itself (authenticate once on launch) and includes an optional compatibility
+mode for devices that are unstable with repeated color writes. It is off by default and can be
+enabled in the GUI's "Apply Behavior" section. See `gui/README.md` for details and zone mapping
+assumptions.
 
 If you want passwordless GUI launch after one setup step, install with:
 
