@@ -147,6 +147,7 @@ If you want passwordless GUI launch after one setup step, install with:
 This writes a scoped sudoers rule for the current user that allows only
 `msiklm` and `msiklm-gui --as-root` without re-entering your password. This
 requires a system install to `/usr/local/bin` (not `--user-only`).
+You do not need to prepend `sudo`; the installer escalates only when needed.
 
 Voice mode is also available while the GUI is running: it listens to microphone input, ignores
 manual color selections, and streams a 3-zone (`left -> middle -> right`) gradient visualizer.

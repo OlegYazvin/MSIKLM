@@ -58,7 +58,12 @@ run_as_root() {
         "$@"
     elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
+    elif command -v doas >/dev/null 2>&1; then
+        doas "$@"
+    elif command -v pkexec >/dev/null 2>&1; then
+        pkexec "$@"
     else
+        echo "No privilege escalation tool found (sudo/doas/pkexec)." >&2
         return 1
     fi
 }
@@ -100,7 +105,14 @@ make
 
 try_install_packages || true
 
-if [ "$FORCE_USER_INSTALL" -eq 1 ]; then
+if [ "$ENABLE_PASSWORDLESS_SUDO" -eq 1 ] && [ "$FORCE_USER_INSTALL" -eq 1 ]; then
+    echo "--passwordless-sudo cannot be combined with --user-only." >&2
+    exit 1
+fi
+
+if [ "$ENABLE_PASSWORDLESS_SUDO" -eq 1 ]; then
+    BIN_DIR="/usr/local/bin"
+elif [ "$FORCE_USER_INSTALL" -eq 1 ]; then
     BIN_DIR="$HOME/.local/bin"
 elif [ -w /usr/local/bin ]; then
     BIN_DIR="/usr/local/bin"
@@ -108,7 +120,13 @@ else
     BIN_DIR="$HOME/.local/bin"
 fi
 
-mkdir -p "$BIN_DIR"
+if [ ! -d "$BIN_DIR" ]; then
+    if [ -w "$(dirname "$BIN_DIR")" ]; then
+        mkdir -p "$BIN_DIR"
+    else
+        run_as_root mkdir -p "$BIN_DIR"
+    fi
+fi
 
 install_file() {
     src="$1"

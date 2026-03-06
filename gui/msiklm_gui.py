@@ -16,7 +16,7 @@ import time
 
 try:
     import tkinter as tk
-    from tkinter import colorchooser, messagebox, ttk
+    from tkinter import colorchooser, font as tkfont, messagebox, ttk
 except ModuleNotFoundError as exc:
     raise SystemExit(
         "tkinter is not installed. Install it first (Debian/Ubuntu/Mint: sudo apt install python3-tk)."
@@ -155,17 +155,27 @@ KEY_LAYOUT = [
 ROW_OFFSETS = [0, 12, 20, 30, 40]
 HEX_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
-BG_APP = "#09111f"
-BG_PANEL = "#111d33"
-BG_PANEL_ALT = "#162540"
-FG_MAIN = "#dbe8ff"
-FG_MUTED = "#9eb4d8"
-ACCENT = "#3b8bf3"
-ACCENT_DARK = "#2d6dc0"
-SEAM_COLOR = "#4a607d"
-SEAM_GLOW = "#314861"
-FONT_UI = "DejaVu Sans"
-FONT_MONO = "DejaVu Sans Mono"
+BG_APP = "#171a21"
+BG_PANEL = "#1f232b"
+BG_PANEL_ALT = "#1b1f27"
+FG_MAIN = "#f8fafc"
+FG_MUTED = "#aeb8c5"
+ACCENT = "#62a0ea"
+ACCENT_DARK = "#3f7fc7"
+SEAM_COLOR = "#8ca5c7"
+SEAM_GLOW = "#354d68"
+SURFACE_BORDER = "#363c49"
+INPUT_BG = "#262b34"
+INPUT_FG = "#f8fafc"
+LOG_BG = "#141821"
+LOG_FG = "#e7ecf4"
+CANVAS_BG = "#141922"
+CANVAS_SURFACE = "#1d222c"
+TOOLTIP_BG = "#2b313c"
+TOOLTIP_BORDER = "#454d5a"
+FONT_UI = "Cantarell"
+FONT_MONO = "Monospace"
+STACK_BREAKPOINT = 1220
 VOICE_COLOR_PATH = ["blue", "sky", "green", "yellow", "orange", "red", "purple"]
 VOICE_FRAME_SECONDS = 0.12
 VOICE_SAMPLE_RATE = 16000
@@ -243,13 +253,15 @@ class SimpleTooltip:
         label = tk.Label(
             tip,
             text=self.text,
-            bg="#0a1628",
-            fg="#dbe8ff",
+            bg=TOOLTIP_BG,
+            fg=FG_MAIN,
             padx=8,
             pady=4,
             bd=1,
             relief=tk.SOLID,
-            font=(FONT_UI, 9),
+            highlightthickness=1,
+            highlightbackground=TOOLTIP_BORDER,
+            font=("TkDefaultFont", 9),
         )
         label.pack()
         self.tip_window = tip
@@ -329,9 +341,17 @@ class MSIKLMGui(tk.Tk):
         super().__init__()
         self.title("MSIKLM GUI")
         self.geometry("1420x900")
-        self.minsize(1020, 620)
+        self.minsize(880, 560)
         self.configure(bg=BG_APP)
         self.launched_as_root = launched_as_root
+        self._font_ui_family = self._pick_font_family(
+            ["Cantarell", "Inter", "Noto Sans", "IBM Plex Sans", "Ubuntu", "Segoe UI", "DejaVu Sans"],
+            FONT_UI,
+        )
+        self._font_mono_family = self._pick_font_family(
+            ["JetBrains Mono", "Cascadia Mono", "Fira Code", "Iosevka", "Noto Sans Mono", "DejaVu Sans Mono", "Monospace"],
+            FONT_MONO,
+        )
 
         self.zone_color_mode: dict[str, tk.StringVar] = {}
         self.zone_custom_hex: dict[str, tk.StringVar] = {}
@@ -345,7 +365,19 @@ class MSIKLMGui(tk.Tk):
         self.voice_source_combo: ttk.Combobox | None = None
         self._right_scroll_canvas: tk.Canvas | None = None
         self._right_scroll_window: int | None = None
+        self._right_scroll_content: ttk.Frame | None = None
         self._right_mousewheel_bound = False
+        self.body_frame: ttk.Frame | None = None
+        self.left_panel: ttk.Frame | None = None
+        self.right_outer_panel: ttk.Frame | None = None
+        self._layout_is_stacked = False
+        self.layout_note_label: ttk.Label | None = None
+        self.preview_label: ttk.Label | None = None
+        self.voice_status_label: ttk.Label | None = None
+        self.voice_source_label: ttk.Label | None = None
+        self._kb_scale = 1.0
+        self._kb_origin_x = 0.0
+        self._kb_origin_y = 0.0
 
         self.use_brightness = tk.BooleanVar(value=False)
         self.use_mode = tk.BooleanVar(value=False)
@@ -380,89 +412,176 @@ class MSIKLMGui(tk.Tk):
 
         self._setup_styles()
         self._build_ui()
+        self._bind_shortcuts()
         self._set_defaults()
         self._refresh_binary_label()
         self._update_command_preview()
         self._redraw_keyboard()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _pick_font_family(self, preferred: list[str], fallback: str) -> str:
+        try:
+            available = {name.casefold(): name for name in tkfont.families(self)}
+        except tk.TclError:
+            return fallback
+        for name in preferred:
+            hit = available.get(name.casefold())
+            if hit:
+                return hit
+        return fallback
+
+    def _font_ui(self, size: int, weight: str | None = None) -> tuple[str, int] | tuple[str, int, str]:
+        if weight:
+            return (self._font_ui_family, size, weight)
+        return (self._font_ui_family, size)
+
+    def _font_mono(self, size: int, weight: str | None = None) -> tuple[str, int] | tuple[str, int, str]:
+        if weight:
+            return (self._font_mono_family, size, weight)
+        return (self._font_mono_family, size)
+
+    def _kbx(self, value: float) -> float:
+        return self._kb_origin_x + (value * self._kb_scale)
+
+    def _kby(self, value: float) -> float:
+        return self._kb_origin_y + (value * self._kb_scale)
+
+    def _kbs(self, value: float) -> float:
+        return value * self._kb_scale
+
+    def _kb_font(self, size: int, weight: str | None = None) -> tuple[str, int] | tuple[str, int, str]:
+        scaled = max(5, int(round(size * self._kb_scale)))
+        return self._font_ui(scaled, weight)
+
     def _setup_styles(self) -> None:
         style = ttk.Style(self)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
+        for theme in ("clam", "default"):
+            try:
+                style.theme_use(theme)
+                break
+            except tk.TclError:
+                continue
 
-        style.configure(".", font=(FONT_UI, 10))
+        style.configure(".", font=self._font_ui(11))
         style.configure("App.TFrame", background=BG_APP)
         style.configure("Panel.TFrame", background=BG_PANEL)
         style.configure("PanelAlt.TFrame", background=BG_PANEL_ALT)
-        style.configure("Card.TLabelframe", background=BG_PANEL, foreground=FG_MAIN, bordercolor="#243654")
-        style.configure("Card.TLabelframe.Label", background=BG_PANEL, foreground=FG_MAIN)
-        style.configure("RightCard.TLabelframe", background=BG_PANEL_ALT, foreground=FG_MAIN, bordercolor="#2b4365")
-        style.configure("RightCard.TLabelframe.Label", background=BG_PANEL_ALT, foreground=FG_MAIN)
+        style.configure(
+            "Card.TLabelframe",
+            background=BG_PANEL,
+            foreground=FG_MAIN,
+            bordercolor=SURFACE_BORDER,
+            borderwidth=1,
+            relief=tk.SOLID,
+        )
+        style.configure(
+            "Card.TLabelframe.Label",
+            background=BG_PANEL,
+            foreground=FG_MAIN,
+            font=self._font_ui(11, "bold"),
+        )
+        style.configure(
+            "RightCard.TLabelframe",
+            background=BG_PANEL_ALT,
+            foreground=FG_MAIN,
+            bordercolor=SURFACE_BORDER,
+            borderwidth=1,
+            relief=tk.SOLID,
+        )
+        style.configure(
+            "RightCard.TLabelframe.Label",
+            background=BG_PANEL_ALT,
+            foreground=FG_MAIN,
+            font=self._font_ui(11, "bold"),
+        )
         style.configure("TLabel", background=BG_PANEL, foreground=FG_MAIN)
         style.configure("Muted.TLabel", background=BG_PANEL, foreground=FG_MUTED)
-        style.configure("Title.TLabel", background=BG_APP, foreground=lighten(ACCENT, 0.4), font=(FONT_UI, 21, "bold"))
-        style.configure("Subtitle.TLabel", background=BG_APP, foreground="#7fa2d3", font=(FONT_UI, 10))
+        style.configure("Title.TLabel", background=BG_APP, foreground=FG_MAIN, font=self._font_ui(21, "bold"))
+        style.configure("Subtitle.TLabel", background=BG_APP, foreground=FG_MUTED, font=self._font_ui(11))
         style.configure("PanelAlt.TLabel", background=BG_PANEL_ALT, foreground=FG_MAIN)
-        style.configure("PanelAltMuted.TLabel", background=BG_PANEL_ALT, foreground="#89a7d2")
-        style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff", borderwidth=0, padding=8)
+        style.configure("PanelAltMuted.TLabel", background=BG_PANEL_ALT, foreground=FG_MUTED)
+
+        style.configure("TButton", padding=(12, 8), font=self._font_ui(11))
+        style.configure(
+            "Accent.TButton",
+            background=ACCENT,
+            foreground="#ffffff",
+            borderwidth=1,
+        )
         style.map(
             "Accent.TButton",
-            background=[("active", lighten(ACCENT, 0.1)), ("pressed", ACCENT_DARK)],
+            background=[("disabled", "#38404a"), ("active", lighten(ACCENT, 0.08)), ("pressed", ACCENT_DARK)],
+            foreground=[("disabled", "#8f96a2"), ("!disabled", "#ffffff")],
         )
-        style.configure("Ghost.TButton", background="#1a2c49", foreground="#d5e5ff", borderwidth=1, padding=8)
+        style.configure(
+            "Ghost.TButton",
+            background="#2d3440",
+            foreground=FG_MAIN,
+            borderwidth=1,
+        )
         style.map(
             "Ghost.TButton",
-            background=[("active", "#213557"), ("pressed", "#182b46")],
+            background=[("active", "#353d49"), ("pressed", "#252b36")],
         )
-        style.configure("TButton", padding=8)
-        style.configure("TCheckbutton", background=BG_PANEL, foreground=FG_MAIN)
-        style.map("TCheckbutton", background=[("active", BG_PANEL)])
-        style.configure("TEntry", fieldbackground="#0f1a2d", foreground=FG_MAIN)
-        style.configure("TCombobox", fieldbackground="#0f1a2d", foreground=FG_MAIN, arrowsize=14)
+        style.configure("TCheckbutton", background=BG_PANEL_ALT, foreground=FG_MAIN)
+        style.map("TCheckbutton", background=[("active", BG_PANEL_ALT)])
+        style.configure("TEntry", fieldbackground=INPUT_BG, foreground=INPUT_FG)
+        style.configure("TCombobox", fieldbackground=INPUT_BG, foreground=INPUT_FG, arrowsize=14)
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", INPUT_BG)],
+            foreground=[("readonly", INPUT_FG)],
+        )
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self, style="App.TFrame", padding=14)
         root.pack(fill=tk.BOTH, expand=True)
 
         header = ttk.Frame(root, style="App.TFrame")
-        header.pack(fill=tk.X, pady=(0, 10))
+        header.pack(fill=tk.X, pady=(0, 12))
         header_left = ttk.Frame(header, style="App.TFrame")
         header_left.pack(side=tk.LEFT, anchor=tk.W)
         ttk.Label(header_left, text="MSIKLM Lighting Studio", style="Title.TLabel").pack(anchor=tk.W)
         ttk.Label(
             header_left,
-            text="Modern 3-zone keyboard lighting control with reliability fallback.",
+            text="Adaptive 3-zone lighting control tuned for modern Linux desktops.",
             style="Subtitle.TLabel",
         ).pack(anchor=tk.W, pady=(2, 0))
 
         privilege = "root" if os.geteuid() == 0 else "user"
-        privilege_color = "#5dd39e" if os.geteuid() == 0 else "#f2b84c"
+        privilege_color = "#33d17a" if os.geteuid() == 0 else "#f6d32d"
+        privilege_bg = "#143127" if os.geteuid() == 0 else "#3a3018"
         self.privilege_label = tk.Label(
             header,
             text=f"session: {privilege}",
-            bg="#0d1d33",
-            fg=privilege_color,
-            font=(FONT_UI, 10, "bold"),
+            bg=privilege_bg,
+            fg=lighten(privilege_color, 0.18),
+            font=self._font_ui(10, "bold"),
             padx=12,
             pady=5,
             bd=1,
             relief=tk.SOLID,
             highlightthickness=1,
-            highlightbackground=darken(privilege_color, 0.65),
+            highlightbackground=darken(privilege_color, 0.55),
         )
         self.privilege_label.pack(side=tk.RIGHT)
 
-        body = ttk.Frame(root, style="App.TFrame")
-        body.pack(fill=tk.BOTH, expand=True)
+        self.body_frame = ttk.Frame(root, style="App.TFrame")
+        self.body_frame.pack(fill=tk.BOTH, expand=True)
+        self.body_frame.columnconfigure(0, weight=7, minsize=420)
+        self.body_frame.columnconfigure(1, weight=5, minsize=340)
+        self.body_frame.rowconfigure(0, weight=1)
+        self.body_frame.rowconfigure(1, weight=0)
 
-        left = ttk.Frame(body, style="Panel.TFrame", padding=12)
-        right_outer = ttk.Frame(body, style="PanelAlt.TFrame", width=500)
-        right_outer.pack(side=tk.RIGHT, fill=tk.Y, padx=(12, 0))
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        right_outer.pack_propagate(False)
+        left = ttk.Frame(self.body_frame, style="Panel.TFrame", padding=12)
+        right_outer = ttk.Frame(self.body_frame, style="PanelAlt.TFrame")
+        self.left_panel = left
+        self.right_outer_panel = right_outer
+        left.grid(row=0, column=0, sticky=tk.NSEW)
+        right_outer.grid(row=0, column=1, sticky=tk.NSEW, padx=(12, 0))
+        self.body_frame.bind("<Configure>", self._on_body_configure, add="+")
+        left.bind("<Configure>", self._on_left_panel_configure, add="+")
+        right_outer.bind("<Configure>", self._on_right_panel_configure, add="+")
 
         right_scroll_host = ttk.Frame(right_outer, style="PanelAlt.TFrame")
         right_scroll_host.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -484,16 +603,25 @@ class MSIKLMGui(tk.Tk):
         self._right_scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         right = ttk.Frame(self._right_scroll_canvas, style="PanelAlt.TFrame", padding=14)
+        self._right_scroll_content = right
         self._right_scroll_window = self._right_scroll_canvas.create_window((0, 0), window=right, anchor=tk.NW)
         self._right_scroll_canvas.bind("<Configure>", self._on_right_scroll_canvas_configure, add="+")
         right.bind("<Configure>", self._on_right_scroll_content_configure, add="+")
         right_outer.bind("<Enter>", self._enable_right_mousewheel, add="+")
         right_outer.bind("<Leave>", self._disable_right_mousewheel, add="+")
 
-        self.canvas = tk.Canvas(left, width=940, height=460, bg="#0a1628", highlightthickness=0)
+        self.canvas = tk.Canvas(
+            left,
+            width=940,
+            height=360,
+            bg=CANVAS_BG,
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+        )
         self.canvas.pack(fill=tk.X, expand=False)
+        self.canvas.bind("<Configure>", self._on_keyboard_canvas_configure, add="+")
 
-        ttk.Label(
+        self.layout_note_label = ttk.Label(
             left,
             text=(
                 "3-zone keyboard split: LEFT | MIDDLE | RIGHT. "
@@ -502,12 +630,14 @@ class MSIKLMGui(tk.Tk):
             ),
             style="Muted.TLabel",
             wraplength=940,
-        ).pack(fill=tk.X, pady=(8, 6))
+        )
+        self.layout_note_label.pack(fill=tk.X, pady=(8, 6))
         ttk.Label(left, textvariable=self.binary_var, style="Muted.TLabel").pack(fill=tk.X, pady=(0, 8))
 
         preview_frame = ttk.LabelFrame(left, text="Command Preview", style="Card.TLabelframe", padding=8)
         preview_frame.pack(fill=tk.X)
-        ttk.Label(preview_frame, textvariable=self.preview_var).pack(anchor=tk.W)
+        self.preview_label = ttk.Label(preview_frame, textvariable=self.preview_var)
+        self.preview_label.pack(anchor=tk.W, fill=tk.X)
 
         log_frame = ttk.LabelFrame(left, text="Output", style="Card.TLabelframe", padding=8)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
@@ -515,11 +645,13 @@ class MSIKLMGui(tk.Tk):
             log_frame,
             height=10,
             wrap=tk.WORD,
-            bg="#08101f",
-            fg="#cfe0ff",
-            insertbackground="#cfe0ff",
+            bg=LOG_BG,
+            fg=LOG_FG,
+            insertbackground=LOG_FG,
             relief=tk.FLAT,
-            font=(FONT_MONO, 9),
+            font=self._font_mono(9),
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
             state=tk.DISABLED,
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -527,12 +659,12 @@ class MSIKLMGui(tk.Tk):
 
         zones_frame = ttk.LabelFrame(right, text="Zone Colors", style="RightCard.TLabelframe", padding=10)
         zones_frame.pack(fill=tk.X)
-        ttk.Label(zones_frame, text="Use").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
-        ttk.Label(zones_frame, text="Zone").grid(row=0, column=1, sticky=tk.W, padx=(0, 8))
-        ttk.Label(zones_frame, text="Preview").grid(row=0, column=2, sticky=tk.W, padx=(0, 8))
-        ttk.Label(zones_frame, text="Color").grid(row=0, column=3, sticky=tk.W, padx=(0, 8))
-        ttk.Label(zones_frame, text="Hex").grid(row=0, column=4, sticky=tk.W, padx=(0, 8))
-        ttk.Label(zones_frame, text="Pick").grid(row=0, column=5, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Use", style="PanelAltMuted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Zone", style="PanelAltMuted.TLabel").grid(row=0, column=1, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Preview", style="PanelAltMuted.TLabel").grid(row=0, column=2, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Color", style="PanelAltMuted.TLabel").grid(row=0, column=3, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Hex", style="PanelAltMuted.TLabel").grid(row=0, column=4, sticky=tk.W, padx=(0, 8))
+        ttk.Label(zones_frame, text="Pick", style="PanelAltMuted.TLabel").grid(row=0, column=5, sticky=tk.W, padx=(0, 8))
         ttk.Label(
             zones_frame,
             text="Keyboard note: RIGHT includes numpad on GT60 2OD.",
@@ -567,12 +699,12 @@ class MSIKLMGui(tk.Tk):
                 values=COLOR_CHOICES,
                 textvariable=mode_var,
                 state="readonly",
-                width=9,
+                width=7,
             )
             combo.grid(row=row, column=3, sticky=tk.EW, padx=(0, 8), pady=4)
             combo.bind("<<ComboboxSelected>>", lambda _evt, z=zone: self._on_zone_changed(z))
 
-            entry = ttk.Entry(zones_frame, textvariable=hex_var, width=8)
+            entry = ttk.Entry(zones_frame, textvariable=hex_var, width=6)
             entry.grid(row=row, column=4, sticky=tk.EW, padx=(0, 4), pady=4)
             entry.bind("<KeyRelease>", lambda _evt, z=zone: self._on_zone_changed(z))
 
@@ -580,10 +712,10 @@ class MSIKLMGui(tk.Tk):
             pick.grid(row=row, column=5, sticky=tk.W, pady=4)
             row += 1
 
-        zones_frame.grid_columnconfigure(1, minsize=82)
-        zones_frame.grid_columnconfigure(3, weight=1, minsize=102)
-        zones_frame.grid_columnconfigure(4, weight=1, minsize=86)
-        zones_frame.grid_columnconfigure(5, minsize=56)
+        zones_frame.grid_columnconfigure(1, weight=1, minsize=52)
+        zones_frame.grid_columnconfigure(3, weight=2, minsize=72)
+        zones_frame.grid_columnconfigure(4, weight=1, minsize=64)
+        zones_frame.grid_columnconfigure(5, minsize=44)
 
         opts = ttk.LabelFrame(right, text="Apply Behavior", style="RightCard.TLabelframe", padding=10)
         opts.pack(fill=tk.X, pady=(10, 0))
@@ -643,7 +775,7 @@ class MSIKLMGui(tk.Tk):
             values=[VOICE_AUTO_SOURCE],
             textvariable=self.voice_source_var,
             state="readonly",
-            width=26,
+            width=20,
         )
         self.voice_source_combo.grid(row=1, column=1, sticky=tk.EW, padx=(8, 8))
         ttk.Button(voice, text="Refresh", style="Ghost.TButton", command=self._refresh_voice_sources).grid(
@@ -681,15 +813,24 @@ class MSIKLMGui(tk.Tk):
             pady=(4, 0),
         )
 
-        self.voice_meter = tk.Canvas(voice, width=420, height=36, bg="#0d1930", highlightthickness=1, highlightbackground="#2c4365")
+        self.voice_meter = tk.Canvas(
+            voice,
+            width=10,
+            height=36,
+            bg="#1a1e26",
+            highlightthickness=1,
+            highlightbackground=SURFACE_BORDER,
+        )
         self.voice_meter.grid(row=4, column=0, columnspan=3, sticky=tk.EW, pady=(8, 4))
-        ttk.Label(voice, textvariable=self.voice_status_var, style="PanelAltMuted.TLabel", wraplength=430).grid(
+        self.voice_status_label = ttk.Label(voice, textvariable=self.voice_status_var, style="PanelAltMuted.TLabel", wraplength=430)
+        self.voice_status_label.grid(
             row=5,
             column=0,
             columnspan=3,
             sticky=tk.W,
         )
-        ttk.Label(voice, textvariable=self.voice_active_source_var, style="PanelAltMuted.TLabel", wraplength=430).grid(
+        self.voice_source_label = ttk.Label(voice, textvariable=self.voice_active_source_var, style="PanelAltMuted.TLabel", wraplength=430)
+        self.voice_source_label.grid(
             row=6,
             column=0,
             columnspan=3,
@@ -698,15 +839,28 @@ class MSIKLMGui(tk.Tk):
         )
         voice.grid_columnconfigure(1, weight=1)
 
-        actions = ttk.LabelFrame(right_outer, text="Actions", style="RightCard.TLabelframe", padding=10)
-        actions.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=(10, 14))
-        self.apply_button = ttk.Button(actions, text="Apply Colors", style="Accent.TButton", command=self._apply_colors)
-        self.apply_button.pack(fill=tk.X, pady=2)
-        self.mode_button = ttk.Button(actions, text="Apply Mode Only", style="Ghost.TButton", command=self._apply_mode_only)
-        self.mode_button.pack(fill=tk.X, pady=2)
-        self.test_button = ttk.Button(actions, text="Test Connection", style="Ghost.TButton", command=self._test_connection)
-        self.test_button.pack(fill=tk.X, pady=2)
-        ttk.Button(actions, text="Show CLI Help", style="Ghost.TButton", command=self._show_help).pack(fill=tk.X, pady=2)
+        actions = ttk.LabelFrame(right, text="Quick Actions", style="RightCard.TLabelframe", padding=10)
+        actions.pack(fill=tk.X, pady=(10, 0))
+        self.apply_button = ttk.Button(actions, text="Apply Lighting", style="Accent.TButton", command=self._apply_colors)
+        self.apply_button.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=(0, 6))
+        self.mode_button = ttk.Button(actions, text="Apply Mode", style="Ghost.TButton", command=self._apply_mode_only)
+        self.mode_button.grid(row=1, column=0, sticky=tk.EW, padx=(0, 6))
+        self.test_button = ttk.Button(actions, text="Run Test", style="Ghost.TButton", command=self._test_connection)
+        self.test_button.grid(row=1, column=1, sticky=tk.EW)
+        ttk.Button(actions, text="CLI Reference", style="Ghost.TButton", command=self._show_help).grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky=tk.EW,
+            pady=(6, 0),
+        )
+        ttk.Label(
+            actions,
+            text="Shortcuts: Ctrl+Enter apply, Ctrl+Shift+M mode, F5 test.",
+            style="PanelAltMuted.TLabel",
+        ).grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(6, 0))
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
 
     def _set_defaults(self) -> None:
         for zone in PRIMARY_ZONES:
@@ -847,17 +1001,89 @@ class MSIKLMGui(tk.Tk):
             if widget is not None:
                 widget.configure(state=state)
 
+    def _bind_shortcuts(self) -> None:
+        self.bind("<Control-Return>", self._on_shortcut_apply, add="+")
+        self.bind("<Control-KP_Enter>", self._on_shortcut_apply, add="+")
+        self.bind("<Control-Shift-M>", self._on_shortcut_mode, add="+")
+        self.bind("<F5>", self._on_shortcut_test, add="+")
+
+    def _on_shortcut_apply(self, _event: tk.Event[tk.Widget]) -> str:
+        self._apply_colors()
+        return "break"
+
+    def _on_shortcut_mode(self, _event: tk.Event[tk.Widget]) -> str:
+        self._apply_mode_only()
+        return "break"
+
+    def _on_shortcut_test(self, _event: tk.Event[tk.Widget]) -> str:
+        self._test_connection()
+        return "break"
+
+    def _on_body_configure(self, event: tk.Event[tk.Widget]) -> None:
+        if self.body_frame is None or self.left_panel is None or self.right_outer_panel is None:
+            return
+        should_stack = event.width < STACK_BREAKPOINT
+        if should_stack == self._layout_is_stacked:
+            return
+        self._layout_is_stacked = should_stack
+        if should_stack:
+            self.body_frame.columnconfigure(0, weight=1, minsize=320)
+            self.body_frame.columnconfigure(1, weight=0, minsize=0)
+            self.body_frame.rowconfigure(0, weight=7)
+            self.body_frame.rowconfigure(1, weight=3)
+            self.left_panel.grid_configure(row=0, column=0, columnspan=2, sticky=tk.NSEW, pady=(0, 12), padx=(0, 0))
+            self.right_outer_panel.grid_configure(row=1, column=0, columnspan=2, sticky=tk.NSEW, pady=(0, 0), padx=(0, 0))
+        else:
+            self.body_frame.columnconfigure(0, weight=7, minsize=420)
+            self.body_frame.columnconfigure(1, weight=5, minsize=340)
+            self.body_frame.rowconfigure(0, weight=1)
+            self.body_frame.rowconfigure(1, weight=0)
+            self.left_panel.grid_configure(row=0, column=0, columnspan=1, sticky=tk.NSEW, pady=(0, 0), padx=(0, 0))
+            self.right_outer_panel.grid_configure(row=0, column=1, columnspan=1, sticky=tk.NSEW, pady=(0, 0), padx=(12, 0))
+        self.after_idle(self._redraw_keyboard)
+
+    def _on_left_panel_configure(self, event: tk.Event[tk.Widget]) -> None:
+        width = max(260, int(event.width) - 24)
+        if self.layout_note_label is not None:
+            self.layout_note_label.configure(wraplength=width)
+        if self.preview_label is not None:
+            self.preview_label.configure(wraplength=max(220, width - 20))
+
+        target_height = max(230, min(520, int(width * 0.50), int(max(260, event.height * 0.72))))
+        current_height = int(float(self.canvas.cget("height")))
+        if abs(current_height - target_height) >= 3:
+            self.canvas.configure(height=target_height)
+        self._redraw_keyboard()
+
+    def _on_keyboard_canvas_configure(self, _event: tk.Event[tk.Widget]) -> None:
+        self._redraw_keyboard()
+
+    def _update_right_wraps(self, width: int) -> None:
+        wrap = max(220, int(width) - 62)
+        if self.voice_status_label is not None:
+            self.voice_status_label.configure(wraplength=wrap)
+        if self.voice_source_label is not None:
+            self.voice_source_label.configure(wraplength=wrap)
+
+    def _on_right_panel_configure(self, event: tk.Event[tk.Widget]) -> None:
+        self._update_right_wraps(int(event.width))
+
     def _on_right_scroll_content_configure(self, _event: tk.Event[tk.Widget]) -> None:
         if self._right_scroll_canvas is None:
             return
         bounds = self._right_scroll_canvas.bbox("all")
         if bounds is not None:
             self._right_scroll_canvas.configure(scrollregion=bounds)
+        self._update_right_wraps(max(220, int(self._right_scroll_canvas.winfo_width()) - 6))
 
     def _on_right_scroll_canvas_configure(self, event: tk.Event[tk.Widget]) -> None:
         if self._right_scroll_canvas is None or self._right_scroll_window is None:
             return
-        self._right_scroll_canvas.itemconfigure(self._right_scroll_window, width=event.width)
+        self._right_scroll_canvas.itemconfigure(self._right_scroll_window, width=max(220, int(event.width)))
+        bounds = self._right_scroll_canvas.bbox("all")
+        if bounds is not None:
+            self._right_scroll_canvas.configure(scrollregion=bounds)
+        self._update_right_wraps(max(220, int(event.width) - 6))
 
     def _enable_right_mousewheel(self, _event: tk.Event[tk.Widget]) -> None:
         if self._right_mousewheel_bound:
@@ -1424,9 +1650,9 @@ class MSIKLMGui(tk.Tk):
             y2 = height - pad
             y1 = pad + ((1.0 - max(0.0, min(1.0, value))) * (height - (2 * pad)))
             phase = self._voice_palette_phase + (idx * 0.58)
-            fill = self._palette_hex(phase) if value > 0.03 else "#1a2740"
-            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=darken(fill, 0.55), width=1)
-            canvas.create_text((x1 + x2) / 2, y2 - 2, text=PRIMARY_ZONES[idx].upper(), fill="#adc4e8", anchor=tk.S)
+            fill = self._palette_hex(phase) if value > 0.03 else "#2f3440"
+            canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=lighten(fill, 0.2), width=1)
+            canvas.create_text((x1 + x2) / 2, y2 - 2, text=PRIMARY_ZONES[idx].upper(), fill=FG_MUTED, anchor=tk.S)
 
     def _set_log(self, text: str) -> None:
         self.log_text.configure(state=tk.NORMAL)
@@ -1608,11 +1834,13 @@ class MSIKLMGui(tk.Tk):
 
     def _zone_visual_color(self, zone: str) -> str:
         if self.voice_mode_enabled.get() and zone in PRIMARY_ZONES:
-            return darken(self._voice_preview_hex[zone], 0.86)
-        base = self._zone_hex_or_fallback(zone)
+            base = self._voice_preview_hex[zone]
+        else:
+            base = self._zone_hex_or_fallback(zone)
+        idle_base = "#1c2027"
         if not self.zone_include[zone].get():
-            return darken(base, 0.18)
-        return darken(base, 0.86)
+            return blend_hex(idle_base, base, 0.28)
+        return blend_hex(idle_base, base, 0.78)
 
     def _round_rect(self, x1: float, y1: float, x2: float, y2: float, radius: float, **kwargs: object) -> int:
         points = [
@@ -1659,17 +1887,32 @@ class MSIKLMGui(tk.Tk):
             return
 
         fill = self._zone_visual_color(zone)
-        stroke = darken(fill, 0.48)
-        shadow = darken(fill, 0.2)
-        self._round_rect(x + 1, y + 2, x + w + 1, y + h + 2, 7, fill=shadow, outline="")
-        self._round_rect(x, y, x + w, y + h, 7, fill=fill, outline=stroke, width=1)
+        stroke = lighten(fill, 0.25)
+        shadow = darken(fill, 0.52)
+        sx = self._kbx(x)
+        sy = self._kby(y)
+        sw = self._kbs(w)
+        sh = self._kbs(h)
+        radius = max(4.0, self._kbs(7))
+        shadow_dx = max(1.0, self._kbs(1))
+        shadow_dy = max(1.0, self._kbs(2))
+        self._round_rect(
+            sx + shadow_dx,
+            sy + shadow_dy,
+            sx + sw + shadow_dx,
+            sy + sh + shadow_dy,
+            radius,
+            fill=shadow,
+            outline="",
+        )
+        self._round_rect(sx, sy, sx + sw, sy + sh, radius, fill=fill, outline=stroke, width=max(1.0, self._kbs(1)))
         if label and label != "Space":
             self.canvas.create_text(
-                x + (w / 2.0),
-                y + (h / 2.0),
+                sx + (sw / 2.0),
+                sy + (sh / 2.0),
                 text=label,
-                fill=lighten(fill, 0.82),
-                font=(FONT_UI, 8),
+                fill=lighten(fill, 0.74),
+                font=self._kb_font(8),
             )
 
         if zone in PRIMARY_ZONES:
@@ -1697,14 +1940,28 @@ class MSIKLMGui(tk.Tk):
         ]
         for zone, x, y, w, h, label in badges:
             fill = self._zone_visual_color(zone)
-            stroke = darken(fill, 0.55)
-            self._round_rect(x, y, x + w, y + h, 8, fill=darken(fill, 0.88), outline=stroke, width=1)
+            stroke = lighten(fill, 0.22)
+            badge_fill = blend_hex("#0f1218", fill, 0.58)
+            x1 = self._kbx(x)
+            y1 = self._kby(y)
+            x2 = self._kbx(x + w)
+            y2 = self._kby(y + h)
+            self._round_rect(
+                x1,
+                y1,
+                x2,
+                y2,
+                max(4.0, self._kbs(8)),
+                fill=badge_fill,
+                outline=stroke,
+                width=max(1.0, self._kbs(1)),
+            )
             self.canvas.create_text(
-                x + (w / 2),
-                y + (h / 2),
+                self._kbx(x + (w / 2)),
+                self._kby(y + (h / 2)),
                 text=label,
-                fill=lighten(fill, 0.62),
-                font=(FONT_UI, 8, "bold"),
+                fill=lighten(fill, 0.72),
+                font=self._kb_font(8, "bold"),
             )
 
     def _draw_primary_zone_split(
@@ -1712,7 +1969,7 @@ class MSIKLMGui(tk.Tk):
         bounds: dict[str, list[float]],
         zone_rows: dict[str, dict[int, list[float]]],
     ) -> None:
-        colors = {"left": "#5e86b8", "middle": "#6993bd", "right": "#749fbe"}
+        colors = {"left": "#5e97e8", "middle": "#5ca8ea", "right": "#5bb3e6"}
 
         for zone in PRIMARY_ZONES:
             x1, y1, x2, y2 = bounds[zone]
@@ -1723,21 +1980,21 @@ class MSIKLMGui(tk.Tk):
             chip_y = y1 - 30
             chip_w = 118
             self._round_rect(
-                chip_cx - (chip_w / 2),
-                chip_y - 4,
-                chip_cx + (chip_w / 2),
-                chip_y + 20,
-                10,
-                fill=darken(colors[zone], 0.28),
-                outline=darken(colors[zone], 0.78),
-                width=1,
+                self._kbx(chip_cx - (chip_w / 2)),
+                self._kby(chip_y - 4),
+                self._kbx(chip_cx + (chip_w / 2)),
+                self._kby(chip_y + 20),
+                max(4.0, self._kbs(10)),
+                fill=blend_hex("#11151c", colors[zone], 0.42),
+                outline=lighten(colors[zone], 0.08),
+                width=max(1.0, self._kbs(1)),
             )
             self.canvas.create_text(
-                chip_cx,
-                chip_y + 10,
+                self._kbx(chip_cx),
+                self._kby(chip_y + 10),
                 text=f"{zone.upper()} ZONE",
-                fill=colors[zone],
-                font=(FONT_UI, 9, "bold"),
+                fill=lighten(colors[zone], 0.44),
+                font=self._kb_font(9, "bold"),
             )
 
         def seam_polyline(zone_a: str, zone_b: str) -> tuple[list[float], float]:
@@ -1801,19 +2058,25 @@ class MSIKLMGui(tk.Tk):
         ):
             if len(seam) < 4:
                 continue
+            scaled_seam: list[float] = []
+            for idx, point in enumerate(seam):
+                if idx % 2 == 0:
+                    scaled_seam.append(self._kbx(point))
+                else:
+                    scaled_seam.append(self._kby(point))
             glow_width = max(1.8, min(3.0, gap_width - 1.2))
             core_width = max(1.0, glow_width - 1.2)
             self.canvas.create_line(
-                seam,
+                scaled_seam,
                 fill=SEAM_GLOW,
-                width=glow_width,
+                width=max(1.0, self._kbs(glow_width)),
                 capstyle=tk.ROUND,
                 joinstyle=tk.ROUND,
             )
             self.canvas.create_line(
-                seam,
+                scaled_seam,
                 fill=SEAM_COLOR,
-                width=core_width,
+                width=max(1.0, self._kbs(core_width)),
                 capstyle=tk.ROUND,
                 joinstyle=tk.ROUND,
             )
@@ -1821,14 +2084,43 @@ class MSIKLMGui(tk.Tk):
     def _redraw_keyboard(self) -> None:
         self.canvas.delete("all")
 
-        self._round_rect(18, 18, 948, 410, 22, fill="#0f1b30", outline="#2a4164", width=2)
-        self._round_rect(28, 24, 938, 56, 14, fill="#0d1a2d", outline="#223656", width=1)
+        canvas_w = max(1, int(self.canvas.winfo_width()))
+        canvas_h = max(1, int(self.canvas.winfo_height()))
+        design_w = 966.0
+        design_h = 444.0
+        pad = 8.0
+        scale_x = max(0.01, (canvas_w - (2.0 * pad)) / design_w)
+        scale_y = max(0.01, (canvas_h - (2.0 * pad)) / design_h)
+        self._kb_scale = min(scale_x, scale_y)
+        self._kb_origin_x = (canvas_w - (design_w * self._kb_scale)) / 2.0
+        self._kb_origin_y = (canvas_h - (design_h * self._kb_scale)) / 2.0
+
+        self._round_rect(
+            self._kbx(18),
+            self._kby(18),
+            self._kbx(948),
+            self._kby(410),
+            max(8.0, self._kbs(22)),
+            fill=CANVAS_SURFACE,
+            outline=SURFACE_BORDER,
+            width=max(1.0, self._kbs(2)),
+        )
+        self._round_rect(
+            self._kbx(28),
+            self._kby(24),
+            self._kbx(938),
+            self._kby(56),
+            max(5.0, self._kbs(14)),
+            fill="#171b22",
+            outline=SURFACE_BORDER,
+            width=max(1.0, self._kbs(1)),
+        )
         self.canvas.create_text(
-            483,
-            28,
+            self._kbx(483),
+            self._kby(28),
             text="Keyboard Zone Layout",
-            fill=FG_MAIN,
-            font=(FONT_UI, 11, "bold"),
+            fill=lighten(FG_MUTED, 0.08),
+            font=self._kb_font(11, "bold"),
         )
 
         unit = 31
@@ -1857,15 +2149,24 @@ class MSIKLMGui(tk.Tk):
         x = 36
         for zone in ALL_ZONES:
             fill = self._zone_visual_color(zone)
-            self._round_rect(x, legend_y, x + 24, legend_y + 14, 4, fill=fill, outline=darken(fill, 0.5), width=1)
+            self._round_rect(
+                self._kbx(x),
+                self._kby(legend_y),
+                self._kbx(x + 24),
+                self._kby(legend_y + 14),
+                max(2.0, self._kbs(4)),
+                fill=fill,
+                outline=darken(fill, 0.5),
+                width=max(1.0, self._kbs(1)),
+            )
             status = "" if zone in PRIMARY_ZONES or self.zone_include[zone].get() else " (off)"
             self.canvas.create_text(
-                x + 30,
-                legend_y + 7,
+                self._kbx(x + 30),
+                self._kby(legend_y + 7),
                 text=zone + status,
                 fill=FG_MUTED,
                 anchor=tk.W,
-                font=(FONT_UI, 8),
+                font=self._kb_font(8),
             )
             x += 128
 

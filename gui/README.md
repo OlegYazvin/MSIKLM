@@ -19,6 +19,7 @@ For passwordless launch after a one-time setup, use:
 This installs a scoped sudoers rule for the current user (`msiklm` and
 `msiklm-gui --as-root` only). It requires system install to `/usr/local/bin`
 (do not use `--user-only`).
+Run the installer as your normal user; it will request elevation only when needed.
 
 The GUI can apply:
 - keyboard zones: `left`, `middle`, `right`
