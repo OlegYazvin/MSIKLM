@@ -139,7 +139,9 @@ zones (`logo`, `front_left`, `front_right`, `mouse`), then applies settings by e
 The GUI auto-elevates itself (authenticate once on launch) and includes an optional compatibility
 mode for devices that are unstable with repeated color writes. It is off by default and can be
 enabled in the GUI's "Apply Behavior" section. See `gui/README.md` for details and zone mapping
-assumptions.
+assumptions. The interface uses a KDE Plasma / Breeze-inspired style and, when available, reads
+`~/.config/kdeglobals` to mirror the active Plasma color scheme and font preferences. Without that
+file, it falls back to a built-in Breeze Dark-like palette.
 
 If you want passwordless GUI launch after one setup step, install with:
 

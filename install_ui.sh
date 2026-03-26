@@ -203,8 +203,8 @@ cat >"$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=MSIKLM Lighting Studio
-Comment=MSI keyboard lighting GUI
+Name=MSIKLM Control Center
+Comment=MSI keyboard lighting control
 Exec=$BIN_DIR/msiklm-gui
 Icon=input-keyboard
 Terminal=false

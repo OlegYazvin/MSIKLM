@@ -7,6 +7,10 @@ sudo apt install python3-tk alsa-utils pulseaudio-utils
 python3 gui/msiklm_gui.py
 ```
 
+The GUI uses a KDE Plasma / Breeze-inspired visual style. If `~/.config/kdeglobals`
+is available, it also borrows the active Plasma color scheme and preferred UI/mono
+font names from that file; otherwise it falls back to a built-in Breeze Dark-like palette.
+
 The GUI auto-relaunches itself as root (`sudo` first, then `pkexec`) so you should authenticate once
 when opening the app, not on every color change.
 

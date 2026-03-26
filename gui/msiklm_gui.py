@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Modern GUI wrapper for MSIKLM with explicit 3-zone keyboard mapping."""
+"""KDE Plasma-inspired GUI wrapper for MSIKLM with explicit 3-zone keyboard mapping."""
 
 from __future__ import annotations
 
 import argparse
 import array
+import configparser
 import os
 import re
 import shlex
@@ -155,26 +156,31 @@ KEY_LAYOUT = [
 ROW_OFFSETS = [0, 12, 20, 30, 40]
 HEX_PATTERN = re.compile(r"^#?[0-9a-fA-F]{6}$")
 
-BG_APP = "#171a21"
-BG_PANEL = "#1f232b"
-BG_PANEL_ALT = "#1b1f27"
-FG_MAIN = "#f8fafc"
-FG_MUTED = "#aeb8c5"
-ACCENT = "#62a0ea"
-ACCENT_DARK = "#3f7fc7"
-SEAM_COLOR = "#8ca5c7"
-SEAM_GLOW = "#354d68"
-SURFACE_BORDER = "#363c49"
-INPUT_BG = "#262b34"
-INPUT_FG = "#f8fafc"
-LOG_BG = "#141821"
-LOG_FG = "#e7ecf4"
-CANVAS_BG = "#141922"
-CANVAS_SURFACE = "#1d222c"
-TOOLTIP_BG = "#2b313c"
-TOOLTIP_BORDER = "#454d5a"
-FONT_UI = "Cantarell"
-FONT_MONO = "Monospace"
+BG_APP = "#1b1e20"
+BG_PANEL = "#232629"
+BG_PANEL_ALT = "#2b3035"
+FG_MAIN = "#eff0f1"
+FG_MUTED = "#a9b1ba"
+ACCENT = "#3daee9"
+ACCENT_DARK = "#2c8dc2"
+SEAM_COLOR = "#79c3ed"
+SEAM_GLOW = "#294457"
+SURFACE_BORDER = "#3b4147"
+INPUT_BG = "#1d2023"
+INPUT_FG = "#eff0f1"
+LOG_BG = "#171a1d"
+LOG_FG = "#e8ecef"
+CANVAS_BG = "#171a1e"
+CANVAS_SURFACE = "#1f2327"
+TOOLTIP_BG = "#31363b"
+TOOLTIP_BORDER = "#4a5056"
+BUTTON_BG = "#31363b"
+BUTTON_HOVER = "#3a4046"
+BUTTON_PRESSED = "#262b2f"
+BUTTON_FG = "#eff0f1"
+SELECTION_FG = "#ffffff"
+FONT_UI = "Noto Sans"
+FONT_MONO = "Hack"
 STACK_BREAKPOINT = 1220
 VOICE_COLOR_PATH = ["blue", "sky", "green", "yellow", "orange", "red", "purple"]
 VOICE_FRAME_SECONDS = 0.12
@@ -189,6 +195,17 @@ VOICE_SILENCE_HOLD_FRAMES = max(2, int(1.35 / VOICE_FRAME_SECONDS))
 VOICE_MIN_SEND_INTERVAL_ACTIVE = 0.08
 VOICE_MIN_SEND_INTERVAL_SILENT = 0.18
 VOICE_COMPAT_COLORS = ["red", "orange", "yellow", "green", "sky", "blue", "purple", "white"]
+
+
+def parse_csv_rgb(value: str) -> str | None:
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 3:
+        return None
+    try:
+        rgb = [max(0, min(255, int(float(part)))) for part in parts]
+    except ValueError:
+        return None
+    return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
 
 def normalize_hex(value: str) -> str | None:
@@ -234,6 +251,152 @@ def blend_hex(hex_a: str, hex_b: str, ratio: float) -> str:
     return f"#{rr:02x}{rg:02x}{rb:02x}"
 
 
+def hex_luma(hex_color: str) -> float:
+    r = int(hex_color[1:3], 16) / 255.0
+    g = int(hex_color[3:5], 16) / 255.0
+    b = int(hex_color[5:7], 16) / 255.0
+    return (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
+
+
+def readable_text_color(hex_color: str) -> str:
+    return "#1f2328" if hex_luma(hex_color) >= 0.66 else "#ffffff"
+
+
+def _config_hex(
+    config: configparser.ConfigParser,
+    section: str,
+    option: str,
+    fallback: str,
+) -> str:
+    raw = config.get(section, option, fallback="").strip()
+    if not raw:
+        return fallback
+    parsed = parse_csv_rgb(raw)
+    return parsed if parsed else fallback
+
+
+def _config_font_name(config: configparser.ConfigParser, option: str) -> str | None:
+    raw = config.get("General", option, fallback="").strip()
+    if not raw:
+        return None
+    name = raw.split(",", 1)[0].strip()
+    return name or None
+
+
+def load_kde_theme_overrides() -> tuple[dict[str, str], str | None, str | None]:
+    config = configparser.ConfigParser(interpolation=None)
+    config_path = os.path.join(os.path.expanduser("~"), ".config", "kdeglobals")
+    if not os.path.isfile(config_path):
+        return {}, None, None
+    try:
+        loaded = config.read(config_path, encoding="utf-8")
+    except (OSError, configparser.Error):
+        return {}, None, None
+    if not loaded:
+        return {}, None, None
+
+    window_bg = _config_hex(config, "Colors:Window", "BackgroundNormal", BG_APP)
+    view_bg = _config_hex(config, "Colors:View", "BackgroundNormal", BG_PANEL)
+    view_alt = _config_hex(config, "Colors:View", "BackgroundAlternate", BG_PANEL_ALT)
+    button_bg = _config_hex(config, "Colors:Button", "BackgroundNormal", BUTTON_BG)
+    tooltip_bg = _config_hex(config, "Colors:Tooltip", "BackgroundNormal", TOOLTIP_BG)
+    fg_main = _config_hex(config, "Colors:Window", "ForegroundNormal", FG_MAIN)
+    fg_muted = _config_hex(config, "Colors:Window", "ForegroundInactive", FG_MUTED)
+    button_fg = _config_hex(config, "Colors:Button", "ForegroundNormal", fg_main)
+    selection_bg = _config_hex(config, "Colors:Selection", "BackgroundNormal", ACCENT)
+    selection_fg = _config_hex(config, "Colors:Selection", "ForegroundNormal", SELECTION_FG)
+    tooltip_fg = _config_hex(config, "Colors:Tooltip", "ForegroundNormal", fg_main)
+
+    panel_alt = view_alt
+    if panel_alt.lower() == view_bg.lower():
+        panel_alt = blend_hex(window_bg, button_bg, 0.55)
+
+    theme = {
+        "BG_APP": window_bg,
+        "BG_PANEL": view_bg,
+        "BG_PANEL_ALT": panel_alt,
+        "FG_MAIN": fg_main,
+        "FG_MUTED": fg_muted,
+        "ACCENT": selection_bg,
+        "ACCENT_DARK": darken(selection_bg, 0.82),
+        "SEAM_COLOR": blend_hex(selection_bg, view_bg, 0.36),
+        "SEAM_GLOW": blend_hex(selection_bg, view_bg, 0.70),
+        "SURFACE_BORDER": blend_hex(window_bg, fg_main, 0.22),
+        "INPUT_BG": view_bg,
+        "INPUT_FG": fg_main,
+        "LOG_BG": blend_hex(view_bg, tooltip_bg, 0.40),
+        "LOG_FG": tooltip_fg,
+        "CANVAS_BG": blend_hex(window_bg, button_bg, 0.44),
+        "CANVAS_SURFACE": view_bg,
+        "TOOLTIP_BG": tooltip_bg,
+        "TOOLTIP_BORDER": blend_hex(tooltip_bg, fg_main, 0.18),
+        "BUTTON_BG": button_bg,
+        "BUTTON_HOVER": blend_hex(button_bg, view_bg, 0.55),
+        "BUTTON_PRESSED": darken(button_bg, 0.93),
+        "BUTTON_FG": button_fg,
+        "SELECTION_FG": selection_fg,
+    }
+    return theme, _config_font_name(config, "font"), _config_font_name(config, "fixed")
+
+
+def apply_kde_theme_globals() -> None:
+    global BG_APP
+    global BG_PANEL
+    global BG_PANEL_ALT
+    global FG_MAIN
+    global FG_MUTED
+    global ACCENT
+    global ACCENT_DARK
+    global SEAM_COLOR
+    global SEAM_GLOW
+    global SURFACE_BORDER
+    global INPUT_BG
+    global INPUT_FG
+    global LOG_BG
+    global LOG_FG
+    global CANVAS_BG
+    global CANVAS_SURFACE
+    global TOOLTIP_BG
+    global TOOLTIP_BORDER
+    global BUTTON_BG
+    global BUTTON_HOVER
+    global BUTTON_PRESSED
+    global BUTTON_FG
+    global SELECTION_FG
+    global FONT_UI
+    global FONT_MONO
+
+    theme, ui_font, mono_font = load_kde_theme_overrides()
+    if theme:
+        BG_APP = theme["BG_APP"]
+        BG_PANEL = theme["BG_PANEL"]
+        BG_PANEL_ALT = theme["BG_PANEL_ALT"]
+        FG_MAIN = theme["FG_MAIN"]
+        FG_MUTED = theme["FG_MUTED"]
+        ACCENT = theme["ACCENT"]
+        ACCENT_DARK = theme["ACCENT_DARK"]
+        SEAM_COLOR = theme["SEAM_COLOR"]
+        SEAM_GLOW = theme["SEAM_GLOW"]
+        SURFACE_BORDER = theme["SURFACE_BORDER"]
+        INPUT_BG = theme["INPUT_BG"]
+        INPUT_FG = theme["INPUT_FG"]
+        LOG_BG = theme["LOG_BG"]
+        LOG_FG = theme["LOG_FG"]
+        CANVAS_BG = theme["CANVAS_BG"]
+        CANVAS_SURFACE = theme["CANVAS_SURFACE"]
+        TOOLTIP_BG = theme["TOOLTIP_BG"]
+        TOOLTIP_BORDER = theme["TOOLTIP_BORDER"]
+        BUTTON_BG = theme["BUTTON_BG"]
+        BUTTON_HOVER = theme["BUTTON_HOVER"]
+        BUTTON_PRESSED = theme["BUTTON_PRESSED"]
+        BUTTON_FG = theme["BUTTON_FG"]
+        SELECTION_FG = theme["SELECTION_FG"]
+    if ui_font:
+        FONT_UI = ui_font
+    if mono_font:
+        FONT_MONO = mono_font
+
+
 class SimpleTooltip:
     def __init__(self, widget: tk.Widget, text: str) -> None:
         self.widget = widget
@@ -261,7 +424,7 @@ class SimpleTooltip:
             relief=tk.SOLID,
             highlightthickness=1,
             highlightbackground=TOOLTIP_BORDER,
-            font=("TkDefaultFont", 9),
+            font=(FONT_UI, 9),
         )
         label.pack()
         self.tip_window = tip
@@ -339,17 +502,17 @@ def relaunch_as_root(args: argparse.Namespace) -> None:
 class MSIKLMGui(tk.Tk):
     def __init__(self, launched_as_root: bool) -> None:
         super().__init__()
-        self.title("MSIKLM GUI")
+        self.title("MSIKLM Control Center")
         self.geometry("1420x900")
         self.minsize(880, 560)
         self.configure(bg=BG_APP)
         self.launched_as_root = launched_as_root
         self._font_ui_family = self._pick_font_family(
-            ["Cantarell", "Inter", "Noto Sans", "IBM Plex Sans", "Ubuntu", "Segoe UI", "DejaVu Sans"],
+            [FONT_UI, "Noto Sans", "Noto Sans Display", "Cantarell", "IBM Plex Sans", "Ubuntu", "Segoe UI", "DejaVu Sans"],
             FONT_UI,
         )
         self._font_mono_family = self._pick_font_family(
-            ["JetBrains Mono", "Cascadia Mono", "Fira Code", "Iosevka", "Noto Sans Mono", "DejaVu Sans Mono", "Monospace"],
+            [FONT_MONO, "Hack", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Iosevka", "Noto Sans Mono", "DejaVu Sans Mono", "Monospace"],
             FONT_MONO,
         )
 
@@ -462,7 +625,7 @@ class MSIKLMGui(tk.Tk):
             except tk.TclError:
                 continue
 
-        style.configure(".", font=self._font_ui(11))
+        style.configure(".", font=self._font_ui(10), background=BG_APP, foreground=FG_MAIN)
         style.configure("App.TFrame", background=BG_APP)
         style.configure("Panel.TFrame", background=BG_PANEL)
         style.configure("PanelAlt.TFrame", background=BG_PANEL_ALT)
@@ -501,36 +664,65 @@ class MSIKLMGui(tk.Tk):
         style.configure("PanelAlt.TLabel", background=BG_PANEL_ALT, foreground=FG_MAIN)
         style.configure("PanelAltMuted.TLabel", background=BG_PANEL_ALT, foreground=FG_MUTED)
 
-        style.configure("TButton", padding=(12, 8), font=self._font_ui(11))
+        style.configure("TButton", padding=(12, 7), font=self._font_ui(10))
         style.configure(
             "Accent.TButton",
             background=ACCENT,
-            foreground="#ffffff",
+            foreground=SELECTION_FG,
             borderwidth=1,
+            relief=tk.FLAT,
         )
         style.map(
             "Accent.TButton",
-            background=[("disabled", "#38404a"), ("active", lighten(ACCENT, 0.08)), ("pressed", ACCENT_DARK)],
-            foreground=[("disabled", "#8f96a2"), ("!disabled", "#ffffff")],
+            background=[("disabled", blend_hex(BG_PANEL_ALT, SURFACE_BORDER, 0.55)), ("active", lighten(ACCENT, 0.06)), ("pressed", ACCENT_DARK)],
+            foreground=[("disabled", FG_MUTED), ("!disabled", SELECTION_FG)],
         )
         style.configure(
             "Ghost.TButton",
-            background="#2d3440",
-            foreground=FG_MAIN,
+            background=BUTTON_BG,
+            foreground=BUTTON_FG,
             borderwidth=1,
+            relief=tk.FLAT,
         )
         style.map(
             "Ghost.TButton",
-            background=[("active", "#353d49"), ("pressed", "#252b36")],
+            background=[("disabled", blend_hex(BUTTON_BG, BG_PANEL_ALT, 0.45)), ("active", BUTTON_HOVER), ("pressed", BUTTON_PRESSED)],
+            foreground=[("disabled", FG_MUTED), ("!disabled", BUTTON_FG)],
         )
         style.configure("TCheckbutton", background=BG_PANEL_ALT, foreground=FG_MAIN)
-        style.map("TCheckbutton", background=[("active", BG_PANEL_ALT)])
-        style.configure("TEntry", fieldbackground=INPUT_BG, foreground=INPUT_FG)
-        style.configure("TCombobox", fieldbackground=INPUT_BG, foreground=INPUT_FG, arrowsize=14)
+        style.map(
+            "TCheckbutton",
+            background=[("active", BG_PANEL_ALT)],
+            foreground=[("disabled", FG_MUTED), ("!disabled", FG_MAIN)],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=INPUT_BG,
+            foreground=INPUT_FG,
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=INPUT_BG,
+            foreground=INPUT_FG,
+            background=INPUT_BG,
+            arrowsize=14,
+        )
         style.map(
             "TCombobox",
             fieldbackground=[("readonly", INPUT_BG)],
             foreground=[("readonly", INPUT_FG)],
+            background=[("readonly", INPUT_BG)],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=BUTTON_BG,
+            troughcolor=BG_PANEL_ALT,
+        )
+        style.map("Vertical.TScrollbar", background=[("active", BUTTON_HOVER)])
+        style.configure(
+            "Horizontal.TScale",
+            background=BG_PANEL_ALT,
+            troughcolor=blend_hex(BG_PANEL_ALT, SURFACE_BORDER, 0.35),
         )
 
     def _build_ui(self) -> None:
@@ -541,28 +733,28 @@ class MSIKLMGui(tk.Tk):
         header.pack(fill=tk.X, pady=(0, 12))
         header_left = ttk.Frame(header, style="App.TFrame")
         header_left.pack(side=tk.LEFT, anchor=tk.W)
-        ttk.Label(header_left, text="MSIKLM Lighting Studio", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(header_left, text="MSIKLM Control Center", style="Title.TLabel").pack(anchor=tk.W)
         ttk.Label(
             header_left,
-            text="Adaptive 3-zone lighting control tuned for modern Linux desktops.",
+            text="Keyboard lighting control with a Breeze-style KDE Plasma look and feel.",
             style="Subtitle.TLabel",
         ).pack(anchor=tk.W, pady=(2, 0))
 
         privilege = "root" if os.geteuid() == 0 else "user"
         privilege_color = "#33d17a" if os.geteuid() == 0 else "#f6d32d"
-        privilege_bg = "#143127" if os.geteuid() == 0 else "#3a3018"
+        privilege_bg = blend_hex(BG_PANEL_ALT, privilege_color, 0.18)
         self.privilege_label = tk.Label(
             header,
             text=f"session: {privilege}",
             bg=privilege_bg,
-            fg=lighten(privilege_color, 0.18),
+            fg=blend_hex(privilege_color, FG_MAIN, 0.28),
             font=self._font_ui(10, "bold"),
             padx=12,
             pady=5,
             bd=1,
             relief=tk.SOLID,
             highlightthickness=1,
-            highlightbackground=darken(privilege_color, 0.55),
+            highlightbackground=blend_hex(privilege_bg, privilege_color, 0.58),
         )
         self.privilege_label.pack(side=tk.RIGHT)
 
@@ -1837,10 +2029,10 @@ class MSIKLMGui(tk.Tk):
             base = self._voice_preview_hex[zone]
         else:
             base = self._zone_hex_or_fallback(zone)
-        idle_base = "#1c2027"
+        idle_base = blend_hex(CANVAS_SURFACE, BG_PANEL_ALT, 0.48)
         if not self.zone_include[zone].get():
-            return blend_hex(idle_base, base, 0.28)
-        return blend_hex(idle_base, base, 0.78)
+            return blend_hex(idle_base, base, 0.18)
+        return blend_hex(idle_base, base, 0.70)
 
     def _round_rect(self, x1: float, y1: float, x2: float, y2: float, radius: float, **kwargs: object) -> int:
         points = [
@@ -1887,8 +2079,11 @@ class MSIKLMGui(tk.Tk):
             return
 
         fill = self._zone_visual_color(zone)
-        stroke = lighten(fill, 0.25)
-        shadow = darken(fill, 0.52)
+        if hex_luma(fill) >= 0.64:
+            stroke = darken(fill, 0.82)
+        else:
+            stroke = lighten(fill, 0.16)
+        shadow = blend_hex(SURFACE_BORDER, fill, 0.28)
         sx = self._kbx(x)
         sy = self._kby(y)
         sw = self._kbs(w)
@@ -1911,8 +2106,8 @@ class MSIKLMGui(tk.Tk):
                 sx + (sw / 2.0),
                 sy + (sh / 2.0),
                 text=label,
-                fill=lighten(fill, 0.74),
-                font=self._kb_font(8),
+                fill=readable_text_color(fill),
+                font=self._kb_font(8, "bold"),
             )
 
         if zone in PRIMARY_ZONES:
@@ -1940,8 +2135,8 @@ class MSIKLMGui(tk.Tk):
         ]
         for zone, x, y, w, h, label in badges:
             fill = self._zone_visual_color(zone)
-            stroke = lighten(fill, 0.22)
-            badge_fill = blend_hex("#0f1218", fill, 0.58)
+            stroke = blend_hex(SURFACE_BORDER, fill, 0.40)
+            badge_fill = blend_hex(BG_PANEL_ALT, fill, 0.34 if self.zone_include[zone].get() else 0.18)
             x1 = self._kbx(x)
             y1 = self._kby(y)
             x2 = self._kbx(x + w)
@@ -1960,7 +2155,7 @@ class MSIKLMGui(tk.Tk):
                 self._kbx(x + (w / 2)),
                 self._kby(y + (h / 2)),
                 text=label,
-                fill=lighten(fill, 0.72),
+                fill=readable_text_color(badge_fill),
                 font=self._kb_font(8, "bold"),
             )
 
@@ -1969,7 +2164,11 @@ class MSIKLMGui(tk.Tk):
         bounds: dict[str, list[float]],
         zone_rows: dict[str, dict[int, list[float]]],
     ) -> None:
-        colors = {"left": "#5e97e8", "middle": "#5ca8ea", "right": "#5bb3e6"}
+        colors = {
+            "left": blend_hex(ACCENT, "#7cc4ef", 0.20),
+            "middle": ACCENT,
+            "right": blend_hex(ACCENT, "#4f9de5", 0.30),
+        }
 
         for zone in PRIMARY_ZONES:
             x1, y1, x2, y2 = bounds[zone]
@@ -1985,15 +2184,15 @@ class MSIKLMGui(tk.Tk):
                 self._kbx(chip_cx + (chip_w / 2)),
                 self._kby(chip_y + 20),
                 max(4.0, self._kbs(10)),
-                fill=blend_hex("#11151c", colors[zone], 0.42),
-                outline=lighten(colors[zone], 0.08),
+                fill=blend_hex(BG_PANEL_ALT, colors[zone], 0.26),
+                outline=blend_hex(SURFACE_BORDER, colors[zone], 0.36),
                 width=max(1.0, self._kbs(1)),
             )
             self.canvas.create_text(
                 self._kbx(chip_cx),
                 self._kby(chip_y + 10),
                 text=f"{zone.upper()} ZONE",
-                fill=lighten(colors[zone], 0.44),
+                fill=blend_hex(colors[zone], FG_MAIN, 0.52),
                 font=self._kb_font(9, "bold"),
             )
 
@@ -2101,7 +2300,7 @@ class MSIKLMGui(tk.Tk):
             self._kbx(948),
             self._kby(410),
             max(8.0, self._kbs(22)),
-            fill=CANVAS_SURFACE,
+            fill=blend_hex(CANVAS_SURFACE, BG_PANEL, 0.22),
             outline=SURFACE_BORDER,
             width=max(1.0, self._kbs(2)),
         )
@@ -2111,15 +2310,15 @@ class MSIKLMGui(tk.Tk):
             self._kbx(938),
             self._kby(56),
             max(5.0, self._kbs(14)),
-            fill="#171b22",
-            outline=SURFACE_BORDER,
+            fill=blend_hex(CANVAS_SURFACE, BG_PANEL_ALT, 0.62),
+            outline=blend_hex(SURFACE_BORDER, BG_PANEL_ALT, 0.30),
             width=max(1.0, self._kbs(1)),
         )
         self.canvas.create_text(
             self._kbx(483),
             self._kby(28),
             text="Keyboard Zone Layout",
-            fill=lighten(FG_MUTED, 0.08),
+            fill=FG_MAIN,
             font=self._kb_font(11, "bold"),
         )
 
@@ -2156,7 +2355,7 @@ class MSIKLMGui(tk.Tk):
                 self._kby(legend_y + 14),
                 max(2.0, self._kbs(4)),
                 fill=fill,
-                outline=darken(fill, 0.5),
+                outline=blend_hex(SURFACE_BORDER, fill, 0.42),
                 width=max(1.0, self._kbs(1)),
             )
             status = "" if zone in PRIMARY_ZONES or self.zone_include[zone].get() else " (off)"
@@ -2181,6 +2380,7 @@ class MSIKLMGui(tk.Tk):
 def main() -> None:
     args = parse_args()
     relaunch_as_root(args)
+    apply_kde_theme_globals()
     app = MSIKLMGui(launched_as_root=args.as_root or os.geteuid() == 0)
     app.mainloop()
 
